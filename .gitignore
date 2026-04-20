@@ -1,0 +1,26 @@
+# Environment and secrets
+.env
+.env.*
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Data (too large for git)
+data/
+pgdata/
+langfuse_data/
+*.parquet
+*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Graphify output (regenerated on demand)
+graphify-out/
