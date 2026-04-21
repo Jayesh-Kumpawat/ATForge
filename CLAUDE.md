@@ -1,30 +1,20 @@
 # ATForge — Agentic Trading Forge
 
-Self-improving multi-agent trading strategy tournament for NSE/BSE Indian equities.
+Automated trading research system for NSE Indian equities that discovers, evaluates, and refines chart-pattern-based strategies using LLM-powered evolution.
 
-## Language and tools
-- Python 3.12 only. No other languages.
-- Always use `uv run` to execute Python. Never use bare `python` or `pip`.
-- Add dependencies with `uv add`. Never use `pip install`.
-- Run tests with `uv run pytest`.
+## Language and tooling
+- Python 3.12 only
+- Always use `uv run` to execute Python. Never bare `python` or `pip`.
+- Add deps: `uv add <package>`. Dev deps: `uv add --group dev <package>`.
+- Tests: `uv run pytest`
+- Lint: `uv run ruff check --fix && uv run ruff format`
 
-## What not to do
-- NEVER commit .env or any file containing API keys or secrets.
-- NEVER use float for financial values. Use decimal.Decimal.
-- NEVER put large data (DataFrames, OHLCV arrays) into LangGraph GraphState.
-
-## Stack
-- LangGraph 1.1.x for orchestration
-- pyribs for MAP-Elites quality-diversity optimization
-- VectorBT for backtesting
-- jugaad-data + yfinance for NSE historical data
-- Angel One SmartAPI for live data and execution
-- Pydantic v2 for all data models
-- Langfuse v3 for observability
-- Gemini 2.0 Flash (free) as primary runtime LLM
-- Groq Llama 3.3 as secondary runtime LLM
-
-## Market constraints
-- NSE only, fty 50 universe, daily EOD timeframe
-- No intraday strategies
-- SEBI static IP mandate applies for SmartAPI orders (April 1, 2026)
+## Hard rules — violating these causes real bugs
+- NEVER commit .env or files containing API keys
+- NEVER use float for financial values — use decimal.Decimal
+- NEVER put large data (DataFrames, OHLCV arrays, Portfolio objects) in LangGraph state — use references/IDs
+- ALL LLM calls must go through a centralized wrapper for Langfuse tracing
+- Shift entry signals by 1 bar in backtests — vectorbt has no lookahead guard
+- On backtest failure, return result with success=False — never raise from worker nodes
+ture reference
+See @CONTEXT.md for full project context, vision, tool choices, and phase plan.
