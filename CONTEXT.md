@@ -1,8 +1,8 @@
 # ATForge — Project Context
 
 ## What we are building
-
-An automated trading research system for NSE Indian equities. Both a portfolio
+ 
+An automated self-improving multi-agent trading strategy and research system for NSE Indian equities. Both a portfolio
 project demonstrating frontier AI engineering AND eventually a real trading system.
 
 The system:
@@ -20,7 +20,7 @@ The system is flexible for human-in-the-loop intervention at any point.
 
 ## Vision — what the final product looks like
 
-A self-improving researchtant that runs overnight, tries hundreds of
+A self-improving research assistant that runs overnight, tries hundreds of
 strategy variations, learns what works in different market conditions, and
 presents me with a ranked portfolio of strategies each morning — with full
 reasoning, backtest proof, and a one-click approval flow before any trade
@@ -39,7 +39,7 @@ what has been tried, what worked, what failed, and why.
 - Free, MIT licensed, extremely fast (~1M simulations in ~20s)
 - Best vectorized programmatic interface for hundreds of automated backtests
 - OSS branch is in maintenance mode but API is frozen and stable
-- Always pass freq="1D", always shift signals ar for lookahead prevention
+- Always pass freq="1D", always shift signals +1 bar for lookahead prevention
 - backtesting.py as secondary for single-strategy deep dives with Bokeh plots
 
 ### Chart Pattern Detection: TA-Lib + pandas-ta-classic + custom code
@@ -55,7 +55,7 @@ what has been tried, what worked, what failed, and why.
   It CANNOT be used programmatically for the automated loop (blocked April 4, 2026)
 - Gemini 2.5 Flash: 1,500 RPD free — primary workhorse for strategy evolution
 - Groq: fast inference for burst tasks
-- OpenRouter: 20+ free models for diversity ck
+- OpenRouter: 20+ free models for diversity checks
 - Local Ollama (Qwen2.5-Coder 14B) as unlimited free fallback for batch/overnight
 - Combined free stack gives ~5,000 requests/day — enough for hundreds of generations
 
@@ -76,7 +76,7 @@ what has been tried, what worked, what failed, and why.
 - Portfolio recognition — interviewers know Qdrant
 
 ### Observability: Langfuse Cloud (free Hobby tier)
-- 50ations/month free — plenty for Phase 1-2
+- 50k observations/month free — plenty for Phase 1-2
 - Purpose-built for LLM agent tracing (traces, spans, scores)
 - Zero infrastructure — no Docker containers to manage
 - Portfolio recognition — industry standard for LLM observability
@@ -95,7 +95,7 @@ what has been tried, what worked, what failed, and why.
 - Island-based diversity management
 - QuantEvolve-style feature-map grid as Phase 2 addition if diversity collapses
 
-versity (Phase 2+): pyribs
+### Diversity (Phase 2+): pyribs
 - Only add when/if simple evolution shows diversity collapse
 - MAP-Elites grid over (holding period, max drawdown, strategy family)
 - Custom LLM mutation emitter
@@ -120,7 +120,7 @@ LLM-powered strategy mutation + OpenEvolve integration + AutoResearch ratchet +
 knowledge base queries (Qdrant RAG) + parallel backtesting via LangGraph Send API.
 
 ### Phase 3 — HITL & Execution
-Telegram/web approval flow + paper trading wrapper + Kite Personal integratialk-forward validation gates + statistical significance testing.
+Telegram/web approval flow + paper trading wrapper + Kite Personal integration + walk-forward validation gates + statistical significance testing.
 
 ### Phase 4 — Scale & Polish
 Multi-strategy portfolio management + regime-aware strategy selection +
