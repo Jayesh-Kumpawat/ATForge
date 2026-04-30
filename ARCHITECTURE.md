@@ -82,11 +82,11 @@ flowchart TD
         DB --> T_RUN & T_STRAT & T_SIG & T_BT & T_EXP
     end
 
-    N2 -.->|calls .fetch()| CACHE
-    N3 -.->|calls .detect()| PD_P
+    N2 -.->|fetch| CACHE
+    N3 -.->|detect| PD_P
     N3 -.->|upsert_strategy| REPO
-    N4 -.->|uses +1 shift| SHIFT
-    RES -.->|insert_backtest_result| REPO
+    N4 -.->|shift signal| SHIFT
+    RES -.->|insert_result| REPO
     N5 -.->|top_rankings| REPO
 
     style LG fill:#fff0f0,stroke:#dc2626
