@@ -21,6 +21,17 @@ from atforge.storage.repo import top_rankings
 
 st.set_page_config(page_title="ATForge", page_icon="📈", layout="wide")
 
+_SIGNAL_FILL = [
+    "rgba(63,185,80,0.15)",
+    "rgba(56,139,253,0.15)",
+    "rgba(210,153,34,0.15)",
+    "rgba(188,77,212,0.15)",
+    "rgba(248,81,73,0.15)",
+]
+_SIGNAL_MARKER = ["#3fb950", "#388bfd", "#d2991a", "#bc4dd4", "#f85149"]
+
+_HOLD_BARS = 10
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=30)
@@ -113,18 +124,73 @@ def candlestick_fig(ohlcv: pd.DataFrame, symbol: str) -> go.Figure:
     return fig
 
 
-def overlay_signal(fig: go.Figure, ohlcv: pd.DataFrame, signal: pd.Series, label: str) -> None:
+def _short_label(label: str) -> str:
+    """CDLENGULFING_bullish -> ENG  |  SMA_20_50 -> SMA  |  RSI_reclaim -> RSI"""
+    clean = label.replace("CDL", "").upper()
+    return clean[:4].rstrip("_")
+
+
+def overlay_signal(
+    fig: go.Figure,
+    ohlcv: pd.DataFrame,
+    signal: pd.Series,
+    label: str,
+    fill_color: str,
+    marker_color: str,
+    show_hold_window: bool = False,
+    show_labels: bool = True,
+) -> int:
     hit_dates = signal[signal].index
     if len(hit_dates) == 0:
-        return
-    prices = ohlcv.loc[ohlcv.index.isin(hit_dates), "low"] * 0.99
+        return 0
+
+    # Triangle markers below each signal candle
+    prices = ohlcv.loc[ohlcv.index.isin(hit_dates), "low"] * 0.985
     fig.add_trace(go.Scatter(
         x=prices.index,
         y=prices.values,
         mode="markers",
-        marker=dict(symbol="triangle-up", size=10, color="#3fb950"),
+        marker=dict(symbol="triangle-up", size=11, color=marker_color),
         name=label,
     ))
+
+    idx = ohlcv.index
+    for d in hit_dates:
+        if d not in idx:
+            continue
+        pos = idx.get_loc(d)
+
+        # Highlight signal candle
+        fig.add_vrect(
+            x0=d, x1=d + pd.Timedelta(days=1),
+            fillcolor=fill_color, opacity=1.0, line_width=0,
+            layer="below",
+        )
+
+        # Optional: shade the simulated hold window (T+1 to T+hold_bars)
+        if show_hold_window:
+            end_pos = min(pos + _HOLD_BARS, len(idx) - 1)
+            end_d = idx[end_pos]
+            fig.add_vrect(
+                x0=d + pd.Timedelta(days=1), x1=end_d + pd.Timedelta(days=1),
+                fillcolor=fill_color, opacity=0.5, line_width=0,
+                layer="below",
+            )
+
+        # Optional: annotation label above candle
+        if show_labels:
+            high = ohlcv.loc[d, "high"] if d in ohlcv.index else prices.get(d, 0)
+            fig.add_annotation(
+                x=d, y=high,
+                text=_short_label(label),
+                showarrow=True, arrowhead=2, arrowcolor=marker_color,
+                ax=0, ay=-28,
+                font=dict(size=9, color=marker_color),
+                bgcolor="rgba(0,0,0,0.5)",
+                borderpad=2,
+            )
+
+    return len(hit_dates)
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -242,7 +308,7 @@ with tabs[1]:
         if ohlcv.empty:
             st.warning("No data in selected date range.")
         else:
-            # OHLCV stats
+            # OHLCV stats + display options
             with col1:
                 last = ohlcv["close"].iloc[-1]
                 first = ohlcv["close"].iloc[0]
@@ -250,6 +316,9 @@ with tabs[1]:
                 st.metric("Last close", f"₹{last:,.2f}", f"{pct:+.1f}% period")
                 st.metric("Rows", f"{len(ohlcv):,}")
                 st.metric("Cache", ohlcv_path.parent.name)
+                st.divider()
+                show_hold = st.checkbox(f"Show hold window ({_HOLD_BARS} bars)", value=False)
+                show_labels = st.checkbox("Show pattern labels", value=True)
 
             fig = candlestick_fig(ohlcv, symbol)
 
@@ -264,15 +333,24 @@ with tabs[1]:
                         default=sorted(strategy_labels.keys())[:2] if strategy_labels else [],
                     )
 
-                for label in selected_strats:
+                total_signals = 0
+                for i, label in enumerate(selected_strats):
+                    fill_color = _SIGNAL_FILL[i % len(_SIGNAL_FILL)]
+                    marker_color = _SIGNAL_MARKER[i % len(_SIGNAL_MARKER)]
                     try:
                         sig_df = pd.read_parquet(strategy_labels[label])
                         sig = sig_df["signal"].astype(bool)
                         if not isinstance(sig.index, pd.DatetimeIndex):
                             sig.index = pd.DatetimeIndex(sig.index)
                         sig = sig.loc[str(start_d):str(end_d)] if len(date_range) == 2 else sig
-                        overlay_signal(fig, ohlcv, sig, label)
-                        n_hits = int(sig.sum())
+                        # suppress labels if too many signals (visual clutter)
+                        n_hits = overlay_signal(
+                            fig, ohlcv, sig, label,
+                            fill_color, marker_color,
+                            show_hold_window=show_hold,
+                            show_labels=show_labels and (total_signals + int(sig.sum()) <= 30),
+                        )
+                        total_signals += n_hits
                         st.caption(f"▲ {label}: {n_hits} signals in range")
                     except Exception as e:
                         st.warning(f"Could not load signal {label}: {e}")
