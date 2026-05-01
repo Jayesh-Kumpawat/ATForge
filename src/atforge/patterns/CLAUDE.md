@@ -82,8 +82,32 @@ Set up in `cli.py::_default_detectors()`:
 - Signal index must match the OHLCV input index exactly.
 - Detectors must be stateless — no mutable state, safe to reuse across symbols.
 
+## Composition detectors (`composition.py`)
+
+`AndDetector(left, right)` and `OrDetector(left, right)` combine two detectors via `&` / `|` on their signal Series. Satisfy the `PatternDetector` Protocol structurally — no inheritance.
+
+```python
+from atforge.patterns.composition import AndDetector, OrDetector
+
+combined = AndDetector(SmaCrossover(5, 20), RsiOversoldReclaim(14, 30))
+signal = combined.detect(ohlcv_df)
+# signal.signal = sma_signal & rsi_signal
+# signal.pattern_name = "AND(SMA_5x20_bullish,RSI_14_reclaim_30)"
+```
+
+**Deterministic naming**: `name = f"{op}({left.name},{right.name})"`. This feeds `upsert_strategy` whose UNIQUE constraint is `(name, params_json)` — stable names are required for dedup.
+
+**Serialization**: `evolution/registry.py` converts these to/from `DetectorConfig` dicts:
+```python
+{"type": "and", "left": {"type": "sma_crossover", ...}, "right": {"type": "rsi_oversold", ...}}
+```
+Always serialized with `sort_keys=True` — UNIQUE constraint depends on stable key ordering.
+
+`CompositionMutator` (in `evolution/mutators/composition.py`) generates these via LLM-guided pairwise combination of top-N parents. Max nesting depth 2 prevents signal explosion (AND of AND of AND...).
+
 ## Tests
 
 ```
-tests/patterns/test_detectors.py  — PatternSignal dtype guard, SMA/RSI smoke tests, DoubleBottom stub
+tests/patterns/test_detectors.py   — PatternSignal dtype guard, SMA/RSI smoke tests, DoubleBottom stub
+tests/patterns/test_composition.py — AndDetector, OrDetector signal logic, name format
 ```

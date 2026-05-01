@@ -86,6 +86,7 @@ name = "atforge"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "jugaad-data" },
     { name = "langfuse" },
     { name = "langgraph" },
@@ -120,6 +121,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "jugaad-data", specifier = ">=0.33" },
     { name = "langfuse", specifier = ">=4.0.0" },
     { name = "langgraph", specifier = ">=1.1.7" },

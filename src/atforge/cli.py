@@ -19,6 +19,9 @@ from atforge.data.providers.openchart import OpenchartProvider
 from atforge.data.providers.yfinance import YFinanceProvider
 from atforge.graph.deps import PipelineDeps
 from atforge.graph.pipeline import build_pipeline
+from atforge.llm.registry import build_default_registry
+from atforge.llm.router import complete_with_fallback
+from atforge.llm.types import LlmRequest
 from atforge.patterns.pandas_ta import RsiOversoldReclaim, SmaCrossover
 from atforge.patterns.talib_cdl import CDL_PATTERNS, TalibCdlDetector
 from atforge.storage.db import connect, init_db
@@ -60,8 +63,22 @@ def pipeline(
         str | None,
         typer.Option(help="Comma-separated symbols override (skips universe)"),
     ] = None,
+    max_generations: Annotated[
+        int, typer.Option(help="Max evolution generations (1=initial run only, no loop)")
+    ] = 1,
+    mutators: Annotated[
+        str, typer.Option(help="Comma-separated mutator names: param_delta,composition")
+    ] = "param_delta,composition",
+    top_n_parents: Annotated[
+        int, typer.Option(help="Top-N strategies to use as parents for mutation")
+    ] = 5,
+    llm_priority: Annotated[
+        str, typer.Option(help="Comma-separated LLM provider priority")
+    ] = "gemini,groq,openrouter",
+    enable_ollama: Annotated[bool, typer.Option(help="Enable local Ollama provider")] = False,
+    dry_run: Annotated[bool, typer.Option(help="Skip experiment DB writes (ratchet logs only)")] = False,
 ) -> None:
-    """Run the full Phase 1 pipeline end-to-end."""
+    """Run the full Phase 2a pipeline end-to-end with optional LLM evolution."""
     from atforge.data.universe import load_nifty50
 
     end = date.today()
@@ -77,6 +94,14 @@ def pipeline(
     settings.ensure_dirs()
     init_db(settings.db_path)
 
+    mutator_list = _build_mutators(
+        mutator_names=[m.strip() for m in mutators.split(",") if m.strip()],
+        llm_priority=[p.strip() for p in llm_priority.split(",") if p.strip()],
+        enable_ollama=enable_ollama,
+    )
+
+    effective_max_gen = 1 if dry_run else max_generations
+
     deps = PipelineDeps(
         data_provider=_build_default_provider(),
         detectors=_default_detectors(),
@@ -84,17 +109,23 @@ def pipeline(
         signal_cache_dir=settings.cache_dir / "signals",
         db_path=settings.db_path,
         init_cash=Decimal("100000"),
+        mutators=tuple(mutator_list),
+        top_n_parents=top_n_parents,
     )
     graph = build_pipeline(deps)
     run_id = uuid4().hex[:12]
 
-    console.print(f"[green]run[/] {run_id} symbols={len(syms)} window={start}..{end}")
+    console.print(
+        f"[green]run[/] {run_id} symbols={len(syms)} window={start}..{end} "
+        f"max_gen={effective_max_gen} mutators={mutators}"
+    )
     result = graph.invoke(
         {
             "run_id": run_id,
             "universe": syms,
             "start_iso": start.isoformat(),
             "end_iso": end.isoformat(),
+            "max_generations": effective_max_gen,
         }
     )
     console.print(
@@ -102,6 +133,49 @@ def pipeline(
         f"failures={len(result.get('failures', []))}"
     )
     _print_rankings(settings.db_path, run_id=run_id, limit=20)
+
+
+@app.command()
+def experiments(
+    run: Annotated[str, typer.Option(help="run_id to inspect")] = "",
+    limit: Annotated[int, typer.Option(help="Max rows to show")] = 20,
+) -> None:
+    """Show experiment log (LLM mutations + ratchet verdicts) for a run."""
+    with connect(settings.db_path) as conn:
+        where = "WHERE run_id=?" if run else ""
+        params = (run, limit) if run else (limit,)
+        rows = conn.execute(
+            f"""
+            SELECT e.experiment_id, e.generation, e.mutator, e.accepted, e.delta_sharpe,
+                   s_parent.name AS parent_name, s_child.name AS child_name, e.reasoning
+            FROM experiments e
+            LEFT JOIN strategies s_parent ON s_parent.strategy_id = e.parent_strategy_id
+            LEFT JOIN strategies s_child ON s_child.strategy_id = e.child_strategy_id
+            {where}
+            ORDER BY e.created_at DESC LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+    if not rows:
+        console.print("[yellow]no experiments found[/]")
+        return
+
+    table = Table(title="Experiments")
+    for col in ["id", "gen", "mutator", "accepted", "Δsharpe", "parent", "child", "reason"]:
+        table.add_column(col)
+    for r in rows:
+        table.add_row(
+            str(r["experiment_id"]),
+            str(r["generation"]),
+            r["mutator"] or "-",
+            "✓" if r["accepted"] == 1 else ("✗" if r["accepted"] == 0 else "?"),
+            f"{r['delta_sharpe']:.3f}" if r["delta_sharpe"] is not None else "-",
+            r["parent_name"] or "-",
+            r["child_name"] or "-",
+            (r["reasoning"] or "")[:40],
+        )
+    console.print(table)
 
 
 @app.command()
@@ -151,6 +225,46 @@ def _print_rankings(db_path: Path, *, run_id: str | None, limit: int) -> None:
             f"{r['win_rate']:.1%}" if r["win_rate"] is not None else "-",
         )
     console.print(table)
+
+
+def _build_mutators(
+    mutator_names: list[str],
+    llm_priority: list[str],
+    enable_ollama: bool,
+) -> list:
+    """Build mutator instances. Returns empty list if no LLM providers configured."""
+    import dataclasses
+
+    # Build a temporary settings override for enable_ollama
+    eff_settings = dataclasses.replace(settings, enable_ollama=enable_ollama)  # type: ignore[call-arg]
+    registry = build_default_registry(eff_settings)
+    priority = llm_priority + (["ollama"] if enable_ollama else [])
+    chain = registry.chain(priority)
+
+    if not chain:
+        console.print("[yellow]warn[/] no LLM providers configured — skipping mutators (set API keys in .env)")
+        return []
+
+    tracing_enabled = bool(settings.langfuse_public_key and settings.langfuse_secret_key)
+
+    def llm_router(req: LlmRequest):
+        return complete_with_fallback(
+            req, registry=registry, priority=priority, tracing_enabled=tracing_enabled
+        )
+
+    mutators = []
+    from atforge.evolution.mutators.composition import CompositionMutator
+    from atforge.evolution.mutators.param_delta import ParamDeltaMutator
+
+    for name in mutator_names:
+        if name == "param_delta":
+            mutators.append(ParamDeltaMutator(llm_router))
+        elif name == "composition":
+            mutators.append(CompositionMutator(llm_router))
+        else:
+            console.print(f"[yellow]warn[/] unknown mutator {name!r} — skipping")
+
+    return mutators
 
 
 def _apply_lookback(end: date, lookback: str) -> date:

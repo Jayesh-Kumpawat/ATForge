@@ -5,6 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from atforge.data.protocol import DataProvider
+from atforge.evolution.types import Mutator, RatchetThresholds
 from atforge.patterns.base import PatternDetector
 
 
@@ -19,6 +20,11 @@ class PipelineDeps:
     init_cash: Decimal = field(default_factory=lambda: Decimal("100000"))
     fees: float = 0.0003
     slippage: float = 0.0005
+
+    # Phase 2a — evolution
+    mutators: tuple[Mutator, ...] = field(default_factory=tuple)
+    ratchet_thresholds: RatchetThresholds = field(default_factory=RatchetThresholds)
+    top_n_parents: int = 5
 
     def ensure_dirs(self) -> None:
         self.ohlcv_cache_dir.mkdir(parents=True, exist_ok=True)

@@ -65,11 +65,12 @@ def insert_pattern_signal(
     n_signals: int,
     first_date: str | None,
     last_date: str | None,
+    generation: int = 0,
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO pattern_signals(run_id, strategy_id, symbol, n_signals, first_date, last_date, created_at) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (run_id, strategy_id, symbol, n_signals, first_date, last_date, _now_iso()),
+        "INSERT INTO pattern_signals(run_id, strategy_id, symbol, n_signals, first_date, last_date, generation, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (run_id, strategy_id, symbol, n_signals, first_date, last_date, generation, _now_iso()),
     )
     return int(cur.lastrowid)
 
@@ -85,6 +86,7 @@ def insert_backtest_result(
     fees: float,
     slippage: float,
     init_cash: Decimal,
+    generation: int = 0,
 ) -> int:
     m = result.metrics
     cur = conn.execute(
@@ -94,8 +96,8 @@ def insert_backtest_result(
             total_return, final_value, max_drawdown,
             sharpe, sortino, cagr, win_rate,
             hold_bars, fees, slippage, init_cash,
-            created_at
-        ) VALUES (?,?,?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?, ?)
+            generation, created_at
+        ) VALUES (?,?,?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?, ?,?)
         """,
         (
             run_id,
@@ -116,6 +118,7 @@ def insert_backtest_result(
             fees,
             slippage,
             str(init_cash),
+            generation,
             _now_iso(),
         ),
     )
@@ -148,3 +151,80 @@ def top_rankings(
     """
     params.append(limit)
     return [dict(r) for r in conn.execute(sql, params).fetchall()]
+
+
+def get_strategy(conn: sqlite3.Connection, strategy_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT strategy_id, name, family, params_json FROM strategies WHERE strategy_id=?",
+        (strategy_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def insert_experiment(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    generation: int,
+    parent_strategy_id: int,
+    child_strategy_id: int,
+    mutator: str,
+    mutation_json: str,
+    accepted: int,
+    delta_sharpe: float,
+    composite_score_json: str,
+    reasoning: str,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO experiments(
+            run_id, generation,
+            parent_strategy_id, child_strategy_id,
+            mutator, mutation_json,
+            accepted, delta_sharpe,
+            composite_score, reasoning,
+            created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            run_id, generation,
+            parent_strategy_id, child_strategy_id,
+            mutator, mutation_json,
+            accepted, delta_sharpe,
+            composite_score_json, reasoning,
+            _now_iso(),
+        ),
+    )
+    return int(cur.lastrowid)
+
+
+def get_top_strategies_for_generation(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    generation: int,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return aggregated per-strategy metrics for a generation — used by mutators."""
+    rows = conn.execute(
+        """
+        SELECT
+            b.strategy_id,
+            s.name,
+            s.family,
+            s.params_json,
+            AVG(b.sharpe)   AS mean_sharpe,
+            AVG(b.sortino)  AS mean_sortino,
+            SUM(b.n_trades) AS total_n_trades,
+            MAX(b.max_drawdown) AS max_drawdown,
+            b.generation
+        FROM backtest_runs b
+        JOIN strategies s ON s.strategy_id = b.strategy_id
+        WHERE b.run_id=? AND b.generation=? AND b.success=1
+        GROUP BY b.strategy_id
+        ORDER BY mean_sharpe DESC
+        LIMIT ?
+        """,
+        (run_id, generation, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]

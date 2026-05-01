@@ -1,62 +1,112 @@
 # LLM Client — `src/atforge/llm/`
 
-## Phase 1 status: SCAFFOLD ONLY
+## Phase 2a status: COMPLETE
 
-This module exists but makes no LLM calls in Phase 1. `complete()` raises `NotImplementedError`.
+This module implements the full LLM provider stack for strategy evolution. All calls
+go through `complete_with_fallback` which chains providers, retries transiently, and
+wraps each call in a Langfuse trace.
 
-The scaffold is here so:
-1. Import paths are stable — Phase 2 fills in the body without changing callers.
-2. The `LlmRequest` / `LlmResponse` dataclasses define the interface contract upfront.
+## Architecture
 
-## Interface
-
-```python
-@dataclass
-class LlmRequest:
-    prompt: str
-    system: str | None = None
-    model: str | None = None         # None = use default from settings
-    temperature: float = 0.7
-    max_tokens: int = 4096
-    trace_name: str | None = None    # Langfuse span name
-
-@dataclass
-class LlmResponse:
-    text: str
-    model: str
-    input_tokens: int
-    output_tokens: int
-
-def complete(request: LlmRequest) -> LlmResponse:
-    raise NotImplementedError("LLM client is Phase 2")
+```
+llm/
+  types.py       — LlmRequest, LlmResponse, LlmProvider Protocol, error hierarchy
+  registry.py    — ProviderRegistry, build_default_registry(settings)
+  router.py      — complete_with_fallback (single public entrypoint)
+  tracing.py     — Langfuse 4.x trace_completion context manager
+  providers/
+    gemini.py    — Google Gemini via openai-compat shim
+    groq.py      — Groq cloud
+    openrouter.py — OpenRouter (20+ free models)
+    ollama.py    — Local Ollama (gated by settings.enable_ollama)
 ```
 
-## Phase 2 implementation plan
+## Calling the LLM
 
-Priority order (all free):
-1. **Gemini 2.5 Flash** — 1,500 requests/day free, primary workhorse
-2. **Groq** — fast inference for burst/latency-sensitive tasks
-3. **OpenRouter** — 20+ free models for diversity / ensemble
-4. **Ollama (Qwen2.5-Coder 14B)** — unlimited local fallback for overnight batch
+```python
+from atforge.llm.registry import build_default_registry
+from atforge.llm.router import complete_with_fallback
+from atforge.llm.types import LlmRequest
+from atforge.config import settings
 
-All calls route through this single `complete()` function with:
-- **Langfuse tracing** — every call creates a trace with `trace_name`, input tokens, output tokens, latency
-- **Automatic fallback** — if Gemini hits rate limit, fall through to Groq, then OpenRouter, then Ollama
-- **Model selection** — `request.model = None` → use current primary; explicit model overrides for experiments
+registry = build_default_registry(settings)
+priority = settings.llm_provider_priority  # e.g. ["gemini", "groq", "openrouter"]
+
+response = complete_with_fallback(
+    LlmRequest(
+        prompt="Suggest new SMA fast/slow windows...",
+        system="You are a quant analyst. Reply with JSON only.",
+        temperature=0.8,
+        trace_name="param_delta_sma",
+    ),
+    registry=registry,
+    priority=priority,
+    tracing_enabled=True,   # flip on when LANGFUSE_PUBLIC_KEY is set
+)
+print(response.text)
+```
+
+## LlmRequest fields
+
+```python
+@dataclass(frozen=True, slots=True)
+class LlmRequest:
+    prompt: str
+    model: str | None = None          # None = provider's default_model
+    system: str | None = None
+    temperature: float = 0.7
+    max_tokens: int = 1024
+    trace_name: str | None = None     # Langfuse span name
+    metadata: dict | None = None
+    response_schema: type | None = None  # reserved for JSON-mode (provider-specific)
+```
+
+## Error handling
+
+| Exception | Meaning | Router action |
+|---|---|---|
+| `RateLimitError` | HTTP 429, quota | retry with exponential backoff, then next provider |
+| `TransientError` | HTTP 5xx, timeout | retry with exponential backoff, then next provider |
+| `AuthError` | HTTP 401/403 | skip provider immediately, try next |
+| `FatalError` | non-retryable 4xx | skip provider immediately, try next |
+| `LlmExhausted` | all providers failed | raised to caller |
+
+## Langfuse tracing (4.x API)
+
+**Do NOT use the v2 `Langfuse(public_key=..., secret_key=...)` constructor** — that's the old API.
+
+Langfuse 4.x (installed as `langfuse>=4.5.0`) uses the OTEL-compatible API:
+
+```python
+from langfuse import get_client
+
+client = get_client()   # reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST from env
+
+with client.start_as_current_observation(name="span_name", as_type="generation", input="...") as obs:
+    result = do_llm_call()
+    obs.update(output=result, usage_details={"input": 10, "output": 20, "total": 30})
+```
+
+Keys are set in `.env` as `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`.
+The `tracing.py::trace_completion` context manager handles this exactly. Pass
+`tracing_enabled=True` to `complete_with_fallback` to activate.
+
+## Adding a new provider
+
+1. Create `llm/providers/myprovider.py` with a class exposing `name`, `default_model`, `complete(request)`, `supports(model)`.
+2. Add a registration block in `registry.py::build_default_registry` (gated on an API key check).
+3. Done — no other changes needed in router, mutators, or ratchet.
 
 ## Critical constraint
 
-**Claude Pro cannot be used programmatically** — blocked April 4, 2026 for API/automated use. Claude Code (interactive session) is the pair-programmer only. Do not add Anthropic SDK to runtime deps.
+**Claude Pro cannot be used programmatically** — blocked April 4, 2026 for API/automated use.
+Claude Code (interactive session) is the pair-programmer only. Do not add Anthropic SDK to runtime deps.
 
-## Langfuse setup (Phase 2)
+## Provider defaults
 
-```python
-from langfuse import Langfuse
-client = Langfuse(
-    public_key=settings.langfuse_public_key,
-    secret_key=settings.langfuse_secret_key,
-    host=settings.langfuse_host,
-)
-```
-
-Keys already read from `.env` via `config.py::Settings`. Langfuse Cloud Hobby tier = 50k observations/month free.
+| Provider | Default model | Free tier |
+|---|---|---|
+| Gemini | gemini-2.5-flash | 1,500 RPD |
+| Groq | llama-3.3-70b-versatile | ~14,400 RPD (burst) |
+| OpenRouter | auto | 20+ free models |
+| Ollama | qwen2.5-coder:14b | unlimited (local) |

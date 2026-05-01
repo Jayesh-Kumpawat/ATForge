@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     openrouter_api_key: str | None = None
     ollama_base_url: str = "http://localhost:11434"
+    enable_ollama: bool = False
+    llm_default_model: str = "gemini-2.5-flash"
+    llm_provider_priority: list[str] = Field(
+        default_factory=lambda: ["gemini", "groq", "openrouter"]
+    )
 
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None

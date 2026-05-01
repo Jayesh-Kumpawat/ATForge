@@ -1134,3 +1134,177 @@ ATForge/
         ├── ohlcv/                   Parquet files per provider/symbol
         └── signals/                 Signal parquets per symbol/strategy/run
 ```
+
+---
+
+## Phase 2a — Evolution Loop (complete)
+
+### Pipeline topology
+
+```
+START
+  → load_universe        seeds detector_configs from deps.detectors
+  → fetch_data
+  → detect_patterns      uses state["detector_configs"] via build_detector_from_config()
+  → [Send×N] run_backtest_one    parallel worker per signal_ref
+  → rank
+  → mutate_strategies    proposes child strategies via LLM mutators
+  → ratchet_node         compares child vs parent, writes experiments rows
+  → loop_decision ──── "continue" → advance_generation → detect_patterns
+                └────── "stop"    → END
+```
+
+`loop_decision` returns `"continue"` if `generation + 1 < max_generations`, else `"stop"`. Default `max_generations=1` = single pass identical to Phase 1.
+
+### PipelineState — Phase 2a fields
+
+| Field | Type | Merge strategy | Description |
+|---|---|---|---|
+| `run_id` | `str` | last-writer-wins | uuid4 hex 12 chars |
+| `universe` | `list[str]` | last-writer-wins | symbol list |
+| `start_iso`, `end_iso` | `str` | last-writer-wins | ISO date range |
+| `generation` | `int` | last-writer-wins | current generation (0-based) |
+| `max_generations` | `int` | last-writer-wins | stop when generation >= this |
+| `detector_configs` | `list[dict]` | **last-writer-wins** | active DetectorConfigs for next detect_patterns |
+| `data_refs` | `dict[str, str]` | last-writer-wins | {symbol: parquet path} |
+| `signal_refs` | `Annotated[list, operator.add]` | **reducer** | accumulated per (symbol, detector) |
+| `backtest_ids` | `Annotated[list, operator.add]` | **reducer** | DB rowids from run_backtest_one workers |
+| `failures` | `Annotated[list, operator.add]` | **reducer** | delta-only failure dicts |
+| `mutations` | `Annotated[list, operator.add]` | **reducer** | proposed child mutations, all generations |
+
+Reducer fields: each node returns only its NEW items. LangGraph merges via `operator.add`. `detector_configs` is last-writer-wins — `advance_generation` overwrites it each loop.
+
+### PipelineDeps — Phase 2a additions
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `mutators` | `tuple[Mutator, ...]` | `()` | `ParamDeltaMutator`, `CompositionMutator` |
+| `ratchet_thresholds` | `RatchetThresholds` | see below | ratchet acceptance config |
+| `top_n_parents` | `int` | `5` | how many parents to mutate per generation |
+
+`RatchetThresholds` defaults: `min_delta_sharpe=0.05`, `min_delta_sortino=0.02`, `max_dd_ratio=1.10`, `min_n_trades=5`.
+
+### Ratchet acceptance criterion
+
+Child is accepted if **all four** conditions hold:
+
+```
+child.mean_sharpe - parent.mean_sharpe  ≥  min_delta_sharpe   (default 0.05)
+child.mean_sortino - parent.mean_sortino ≥  min_delta_sortino  (default 0.02)
+child.max_drawdown / parent.max_drawdown ≤  max_dd_ratio       (default 1.10)
+child.total_n_trades                     ≥  min_n_trades       (default 5)
+```
+
+`composite_score` (stored as JSON in `experiments` table): `{delta_sharpe, delta_sortino, dd_ratio, child_n_trades}`.
+
+`build_evaluation_result` aggregates across symbols: AVG(sharpe), AVG(sortino), SUM(n_trades), MAX(max_drawdown). Phase 2b adds per-symbol ratchet with bootstrap significance.
+
+### Evolution submodule (`src/atforge/evolution/`)
+
+```
+types.py          DetectorConfig, StrategyRow, ProposedMutation, EvaluationResult,
+                  RatchetThresholds, RatchetVerdict, Mutator Protocol
+registry.py       build_detector_from_config(), detector_params_json() — round-trip
+prompts.py        Pydantic LLM response schemas: SmaParamsDelta, RsiParamsDelta, CompositionChoice
+ratchet.py        build_evaluation_result() (DB I/O), judge_mutation() (pure function)
+mutators/
+  param_delta.py  ParamDeltaMutator — SMA + RSI families, JSON fence-strip + brace-match fallback
+  composition.py  CompositionMutator — pairwise AND/OR, max_nesting_depth=2 guard
+```
+
+### LLM submodule (`src/atforge/llm/`)
+
+```
+types.py          LlmRequest, LlmResponse, LlmProvider Protocol, error hierarchy
+registry.py       ProviderRegistry, build_default_registry(settings)
+router.py         complete_with_fallback() — retry+fallback, JSON fence-strip
+tracing.py        Langfuse 4.x wrapper — get_client().start_as_current_observation()
+providers/
+  gemini.py       Gemini 2.5 Flash (primary, 1500 RPD free)
+  groq.py         Groq (burst)
+  openrouter.py   OpenRouter (diversity, 20+ free models)
+  ollama.py       Local Ollama (unlimited, gated by --enable-ollama)
+```
+
+### DB schema additions (Phase 2a)
+
+```sql
+-- Added to pattern_signals and backtest_runs:
+generation INTEGER NOT NULL DEFAULT 0
+
+-- experiments table (fully active):
+run_id TEXT, generation INTEGER, parent_strategy_id INT, child_strategy_id INT,
+mutator TEXT, mutation_json TEXT, accepted INTEGER,
+delta_sharpe REAL, composite_score TEXT, reasoning TEXT
+
+-- New indexes:
+idx_exp_run_gen   ON experiments(run_id, generation)
+idx_bt_strategy_gen ON backtest_runs(strategy_id, generation)
+```
+
+Migration: `storage/migrations/0002_phase2a.sql` — applied automatically by `init_db` via `PRAGMA user_version`.
+
+### Phase 2a file additions
+
+```
+src/atforge/
+├── evolution/
+│   ├── __init__.py
+│   ├── types.py
+│   ├── registry.py
+│   ├── prompts.py
+│   ├── ratchet.py
+│   ├── CLAUDE.md
+│   └── mutators/
+│       ├── __init__.py
+│       ├── param_delta.py
+│       └── composition.py
+│
+├── patterns/
+│   └── composition.py              AndDetector, OrDetector
+│
+├── llm/
+│   ├── types.py
+│   ├── registry.py
+│   ├── router.py
+│   ├── tracing.py
+│   └── providers/
+│       ├── gemini.py
+│       ├── groq.py
+│       ├── openrouter.py
+│       └── ollama.py
+│
+├── graph/
+│   └── nodes_phase2.py             make_run_backtest_one/dispatcher, make_ratchet_node,
+│                                   make_mutate_strategies, make_advance_generation, make_loop_decision
+│
+└── storage/
+    ├── migrate.py
+    └── migrations/
+        └── 0002_phase2a.sql
+
+tests/
+├── evolution/
+│   ├── test_registry_roundtrip.py
+│   ├── test_param_delta.py
+│   ├── test_composition_mutator.py
+│   └── test_ratchet.py
+├── graph/
+│   ├── test_send_fanout.py
+│   └── test_mutate_node.py         includes full 2-generation E2E
+├── integration/
+│   └── test_phase2_pipeline.py
+├── patterns/
+│   └── test_composition.py
+└── storage/
+    └── test_migrate.py
+```
+
+### Phase 2b (deferred)
+
+- OpenEvolve population/island management
+- Qdrant strategy embeddings + similarity dedup
+- Bootstrap statistical significance test for ratchet
+- Per-symbol ratchet (Phase 2a aggregates across symbols)
+- Structural patterns: cup-and-handle, H&S, double tops (scipy.signal, ~200 LOC)
+- Full LLM codegen mutator (Phase 3+)

@@ -1,5 +1,6 @@
 -- ATForge SQLite schema. WAL + JSON1 + FTS5 enabled via db.py.
 -- Money-side values (Decimal) stored as TEXT; ratios as REAL.
+-- Schema version is tracked via PRAGMA user_version (see migrate.py).
 
 CREATE TABLE IF NOT EXISTS runs (
     run_id          TEXT PRIMARY KEY,
@@ -13,7 +14,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS strategies (
     strategy_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT NOT NULL,
-    family          TEXT NOT NULL,   -- 'candlestick' | 'indicator' | 'structural'
+    family          TEXT NOT NULL,   -- 'candlestick' | 'indicator' | 'structural' | 'composite'
     params_json     TEXT NOT NULL,   -- JSON1
     description     TEXT,
     created_at      TEXT NOT NULL,
@@ -28,10 +29,11 @@ CREATE TABLE IF NOT EXISTS pattern_signals (
     n_signals       INTEGER NOT NULL,
     first_date      TEXT,
     last_date       TEXT,
+    generation      INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_signals_run ON pattern_signals(run_id);
+CREATE INDEX IF NOT EXISTS idx_signals_run    ON pattern_signals(run_id);
 CREATE INDEX IF NOT EXISTS idx_signals_symbol ON pattern_signals(symbol);
 
 CREATE TABLE IF NOT EXISTS backtest_runs (
@@ -61,26 +63,36 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     slippage        REAL,
     init_cash       TEXT,
 
+    generation      INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_backtest_run ON backtest_runs(run_id);
-CREATE INDEX IF NOT EXISTS idx_backtest_symbol ON backtest_runs(symbol);
-CREATE INDEX IF NOT EXISTS idx_backtest_strategy ON backtest_runs(strategy_id);
-CREATE INDEX IF NOT EXISTS idx_backtest_sharpe ON backtest_runs(sharpe DESC)
-    WHERE success = 1;
+CREATE INDEX IF NOT EXISTS idx_backtest_run         ON backtest_runs(run_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_symbol      ON backtest_runs(symbol);
+CREATE INDEX IF NOT EXISTS idx_backtest_strategy    ON backtest_runs(strategy_id);
+CREATE INDEX IF NOT EXISTS idx_backtest_sharpe      ON backtest_runs(sharpe DESC) WHERE success = 1;
+CREATE INDEX IF NOT EXISTS idx_bt_strategy_gen      ON backtest_runs(strategy_id, generation);
 
--- Phase 2 experiment log; included now so schema is stable.
+-- Phase 2 experiment log (LLM mutation history + ratchet verdicts).
 CREATE TABLE IF NOT EXISTS experiments (
-    experiment_id   INTEGER PRIMARY KEY AUTOINCREMENT,
-    parent_id       INTEGER REFERENCES experiments(experiment_id),
-    strategy_id     INTEGER REFERENCES strategies(strategy_id),
-    mutation_json   TEXT,             -- proposed delta
-    accepted        INTEGER CHECK (accepted IN (0,1)),
-    delta_sharpe    REAL,
-    reasoning       TEXT,
-    created_at      TEXT NOT NULL
+    experiment_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id            INTEGER REFERENCES experiments(experiment_id),
+    strategy_id          INTEGER REFERENCES strategies(strategy_id),
+    mutation_json        TEXT,             -- proposed delta
+    accepted             INTEGER CHECK (accepted IN (0,1)),
+    delta_sharpe         REAL,
+    reasoning            TEXT,
+    -- Phase 2a additions
+    run_id               TEXT,
+    generation           INTEGER NOT NULL DEFAULT 0,
+    parent_strategy_id   INTEGER REFERENCES strategies(strategy_id),
+    child_strategy_id    INTEGER REFERENCES strategies(strategy_id),
+    composite_score      TEXT,             -- JSON
+    mutator              TEXT,
+    created_at           TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_exp_run_gen ON experiments(run_id, generation);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS strategy_search USING fts5(
     name,
@@ -88,3 +100,5 @@ CREATE VIRTUAL TABLE IF NOT EXISTS strategy_search USING fts5(
     reasoning,
     content=''
 );
+
+PRAGMA user_version = 2;

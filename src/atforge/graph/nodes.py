@@ -9,6 +9,7 @@ import structlog
 
 from atforge.backtest.engine import run_backtest
 from atforge.data.universe import load_nifty50
+from atforge.evolution.registry import _detector_to_config, build_detector_from_config
 from atforge.graph.deps import PipelineDeps
 from atforge.graph.state import PipelineState, SignalRef
 from atforge.storage.db import connect, txn
@@ -24,18 +25,16 @@ log = structlog.get_logger(__name__)
 NodeFn = Callable[[PipelineState], dict[str, Any]]
 
 
-def _append_failure(state: PipelineState, entry: dict[str, Any]) -> list[dict[str, Any]]:
-    out = list(state.get("failures", []))
-    out.append(entry)
-    return out
-
-
 def make_load_universe(deps: PipelineDeps) -> NodeFn:
     def load_universe(state: PipelineState) -> dict[str, Any]:
         universe = state.get("universe") or load_nifty50()
         with connect(deps.db_path) as conn, txn(conn):
             insert_run(conn, state["run_id"])
-        return {"universe": universe}
+        # Seed detector configs for generation 0 from deps if not already in state.
+        result: dict[str, Any] = {"universe": universe}
+        if not state.get("detector_configs"):
+            result["detector_configs"] = [_detector_to_config(d) for d in deps.detectors]
+        return result
 
     return load_universe
 
@@ -45,7 +44,7 @@ def make_fetch_data(deps: PipelineDeps) -> NodeFn:
         start = date.fromisoformat(state["start_iso"])
         end = date.fromisoformat(state["end_iso"])
         refs: dict[str, str] = {}
-        failures = list(state.get("failures", []))
+        new_failures: list[dict[str, Any]] = []
 
         deps.ohlcv_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -57,38 +56,45 @@ def make_fetch_data(deps: PipelineDeps) -> NodeFn:
                 refs[symbol] = str(path)
             except Exception as exc:
                 log.warning("fetch_data_failed", symbol=symbol, error=str(exc))
-                failures.append({"node": "fetch_data", "symbol": symbol, "reason": str(exc)})
+                new_failures.append({"node": "fetch_data", "symbol": symbol, "reason": str(exc)})
 
-        return {"data_refs": refs, "failures": failures}
+        return {"data_refs": refs, "failures": new_failures}
 
     return fetch_data
 
 
 def make_detect_patterns(deps: PipelineDeps) -> NodeFn:
     def detect_patterns(state: PipelineState) -> dict[str, Any]:
-        refs: list[SignalRef] = []
-        failures = list(state.get("failures", []))
+        new_refs: list[SignalRef] = []
+        new_failures: list[dict[str, Any]] = []
         deps.signal_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        generation = state.get("generation", 0)
+        # Resolve detectors from state configs (set by load_universe or advance_generation).
+        detector_configs = state.get("detector_configs") or [
+            _detector_to_config(d) for d in deps.detectors
+        ]
 
         with connect(deps.db_path) as conn, txn(conn):
             for symbol, ohlcv_path in state.get("data_refs", {}).items():
                 try:
                     df = pd.read_parquet(ohlcv_path)
                 except Exception as exc:
-                    failures.append(
+                    new_failures.append(
                         {"node": "detect_patterns", "symbol": symbol, "reason": f"read: {exc}"}
                     )
                     continue
 
-                for det in deps.detectors:
+                for cfg in detector_configs:
                     try:
+                        det = build_detector_from_config(cfg)
                         sig = det.detect(df)
                     except Exception as exc:
-                        failures.append(
+                        new_failures.append(
                             {
                                 "node": "detect_patterns",
                                 "symbol": symbol,
-                                "detector": det.name,
+                                "detector": cfg.get("type", "unknown"),
                                 "reason": str(exc),
                             }
                         )
@@ -98,7 +104,7 @@ def make_detect_patterns(deps: PipelineDeps) -> NodeFn:
                         conn,
                         name=det.name,
                         family=det.family,
-                        params={},
+                        params=cfg,
                     )
                     n = int(sig.signal.sum())
                     first_date, last_date = _first_last_signal_dates(sig.signal)
@@ -111,15 +117,16 @@ def make_detect_patterns(deps: PipelineDeps) -> NodeFn:
                         n_signals=n,
                         first_date=first_date,
                         last_date=last_date,
+                        generation=generation,
                     )
 
                     sig_path = (
                         deps.signal_cache_dir
-                        / f"{_safe(symbol)}_{det.name}_{state['run_id']}.parquet"
+                        / f"{_safe(symbol)}_{det.name}_g{generation}_{state['run_id']}.parquet"
                     )
                     sig.signal.to_frame(name="signal").to_parquet(sig_path)
 
-                    refs.append(
+                    new_refs.append(
                         SignalRef(
                             symbol=symbol,
                             strategy_name=det.name,
@@ -127,18 +134,19 @@ def make_detect_patterns(deps: PipelineDeps) -> NodeFn:
                             signal_id=signal_id,
                             signal_parquet=str(sig_path),
                             ohlcv_parquet=ohlcv_path,
+                            generation=generation,
                         )
                     )
 
-        return {"signal_refs": refs, "failures": failures}
+        return {"signal_refs": new_refs, "failures": new_failures}
 
     return detect_patterns
 
 
 def make_run_backtest(deps: PipelineDeps) -> NodeFn:
     def run_backtest_node(state: PipelineState) -> dict[str, Any]:
-        backtest_ids: list[int] = []
-        failures = list(state.get("failures", []))
+        new_backtest_ids: list[int] = []
+        new_failures: list[dict[str, Any]] = []
 
         with connect(deps.db_path) as conn, txn(conn):
             for ref in state.get("signal_refs", []):
@@ -146,7 +154,7 @@ def make_run_backtest(deps: PipelineDeps) -> NodeFn:
                     ohlcv = pd.read_parquet(ref["ohlcv_parquet"])
                     sig = pd.read_parquet(ref["signal_parquet"])["signal"].astype(bool)
                 except Exception as exc:
-                    failures.append(
+                    new_failures.append(
                         {
                             "node": "run_backtest",
                             "symbol": ref["symbol"],
@@ -177,9 +185,9 @@ def make_run_backtest(deps: PipelineDeps) -> NodeFn:
                     slippage=deps.slippage,
                     init_cash=deps.init_cash,
                 )
-                backtest_ids.append(bid)
+                new_backtest_ids.append(bid)
                 if not result.success:
-                    failures.append(
+                    new_failures.append(
                         {
                             "node": "run_backtest",
                             "symbol": ref["symbol"],
@@ -188,7 +196,7 @@ def make_run_backtest(deps: PipelineDeps) -> NodeFn:
                         }
                     )
 
-        return {"backtest_ids": backtest_ids, "failures": failures}
+        return {"backtest_ids": new_backtest_ids, "failures": new_failures}
 
     return run_backtest_node
 
