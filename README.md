@@ -19,7 +19,7 @@
 5. *(Phase 2)* Uses LLMs to mutate strategy parameters overnight via OpenEvolve + AutoResearch ratchet
 6. *(Phase 3)* Human approves each strategy before paper/live trade executes
 
-**Phase 1 is complete:** 45 tests passing, full pipeline runs end-to-end, Streamlit dashboard live.
+**Phase 2a is complete:** 175 tests passing, full evolution loop runs end-to-end — LLM mutation, parallel backtests via `Send()` fan-out, AutoResearch ratchet, multi-generation cycling.
 
 ---
 
@@ -27,18 +27,24 @@
 
 ```
 CLI (Typer)
-    └── LangGraph Pipeline (5 nodes, linear in Phase 1)
-            ├── load_universe   — Nifty 50 or --symbols arg
-            ├── fetch_data      — CachedProvider → FallbackDataProvider → [openchart|jugaad|yfinance]
-            ├── detect_patterns — 13 PatternDetectors (TA-Lib CDL, SMA cross, RSI reclaim)
-            ├── run_backtest    — vectorbt 0.28, +1 bar shift (no lookahead), Decimal money
-            └── rank            — top_rankings() from SQLite, rich table output
+    └── LangGraph Pipeline (Phase 2a — evolution loop)
+            ├── load_universe       — Nifty 50 or --symbols arg
+            ├── fetch_data          — CachedProvider → FallbackDataProvider → [openchart|jugaad|yfinance]
+            ├── detect_patterns     — 13 PatternDetectors (TA-Lib CDL, SMA cross, RSI reclaim)
+            ├── [Send×N] run_backtest_one  — parallel per signal via LangGraph Send API
+            ├── rank                — top_rankings() from SQLite, rich table output
+            ├── mutate_strategies   — LLM proposes param_delta / composition mutations
+            ├── ratchet_node        — judge_mutation(): accept if Δsharpe≥0.05 ∧ Δsortino≥0.02
+            └── loop_decision ──────→ "continue" → advance_generation → detect_patterns (loop)
+                                    → "stop"    → END
 
-Storage: SQLite (WAL + JSON1 + FTS5) — 5 tables, indexed on sharpe DESC WHERE success=1
+Storage: SQLite (WAL + JSON1 + FTS5) — 5 tables + experiments table (ratchet verdicts)
+LLMs:    Gemini 2.5 Flash (primary) → Groq (burst) → OpenRouter → Ollama Qwen2.5-Coder (fallback)
+Traces:  Langfuse Cloud — every LLM call traced with prompt, response, provider, latency
 Dashboard: Streamlit 4-tab — Rankings | OHLCV+Signals | Run History | DB Stats
 ```
 
-Full architecture with 6 Mermaid diagrams → [`ARCHITECTURE.md`](ARCHITECTURE.md)
+Full architecture with Mermaid diagrams → [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
 ---
 
@@ -67,10 +73,10 @@ Full architecture with 6 Mermaid diagrams → [`ARCHITECTURE.md`](ARCHITECTURE.m
 | Data — fallback 1 | jugaad-data | Bhavcopy CSV, history from 1995 |
 | Data — fallback 2 | yfinance | Split/dividend-adjusted prices |
 | Storage | SQLite + WAL + JSON1 + FTS5 | Concurrent reads during writes |
-| Vector search | Qdrant Cloud (Phase 2) | Strategy embeddings, free tier |
-| Runtime LLMs | Gemini 2.5 Flash + Groq + Ollama | 5,000+ free requests/day combined |
-| Observability | Langfuse Cloud (Phase 2) | LLM call tracing, free Hobby tier |
-| Evolution engine | OpenEvolve + AutoResearch ratchet (Phase 2) | AlphaEvolve-style population mutation |
+| Vector search | Qdrant Cloud (Phase 2b) | Strategy embeddings, similarity dedup |
+| Runtime LLMs | Gemini 2.5 Flash + Groq + OpenRouter + Ollama | 5,000+ free requests/day, provider fallback chain |
+| Observability | Langfuse Cloud | LLM call tracing, every prompt/response logged |
+| Evolution engine | AutoResearch ratchet (Phase 2a) | Δsharpe/Δsortino/drawdown acceptance criterion |
 | Dashboard | Streamlit | 4 tabs, Plotly candlestick charts |
 | CLI | Typer | `pipeline`, `rank`, `inspect` commands |
 
@@ -84,22 +90,28 @@ git clone https://github.com/Jayesh-Kumpawat/ATForge
 cd ATForge
 uv sync
 
-# Copy and fill API keys (optional for Phase 1 — data providers are free)
+# Copy and fill API keys (Gemini/Groq for LLM evolution; data providers are free)
 cp .env.example .env
 
-# Run pipeline — downloads data, detects patterns, backtests, prints rankings
+# Single-pass run — baseline, no evolution (identical to Phase 1)
 uv run python main.py pipeline --symbols RELIANCE,TCS,INFY --lookback 1y
 
-# Or full Nifty 50 (takes ~10-20 min on first run, cached on subsequent)
-uv run python main.py pipeline --lookback 2y
+# Evolution run — 3 LLM-driven generations, param_delta + composition mutators
+uv run python main.py pipeline --symbols RELIANCE,TCS --lookback 1y \
+  --max-generations 3 \
+  --mutators param_delta,composition \
+  --top-n-parents 5
 
-# View rankings
+# Inspect what the ratchet accepted/rejected (use run_id printed above)
+uv run python main.py experiments --run <run_id>
+
+# View rankings across all runs
 uv run python main.py rank --top 20
 
-# Dashboard
+# Dashboard (Rankings | OHLCV+Signals | Run History | DB Stats)
 uv run streamlit run dashboard.py
 
-# Browse raw DB
+# Browse raw DB — all tables, full experiment log
 uvx datasette data/atforge.db
 ```
 
@@ -118,8 +130,9 @@ ATForge/
 │   ├── patterns/               PatternDetector protocol + 3 detector types
 │   ├── backtest/               vectorbt engine, BacktestResult, Decimal money
 │   ├── storage/                SQLite schema, repo functions, WAL config
-│   ├── graph/                  LangGraph state, deps, nodes, pipeline
-│   └── llm/                    LLM client scaffold (Phase 2 — NotImplementedError now)
+│   ├── graph/                  LangGraph state, deps, nodes (Phase 1), nodes_phase2 (evolution loop)
+│   ├── llm/                    Provider registry, router, Langfuse tracing
+│   └── evolution/              Mutators (param_delta, composition), ratchet, detector registry
 ├── tests/                      45 tests — E2E, unit, integration
 ├── ARCHITECTURE.md             6 Mermaid diagrams covering every component
 └── CONTEXT.md                  Full vision, tool choices, phase plan
@@ -132,19 +145,21 @@ ATForge/
 | Phase | Status | Scope |
 |---|---|---|
 | **1 — Foundation** | **Complete** | Data pipeline → pattern detection → backtesting → SQLite → dashboard |
-| 2 — Evolution | Planned | LLM mutation loop, OpenEvolve, Qdrant RAG, parallel fan-out |
-| 3 — HITL & Execution | Planned | Telegram approval, paper trading, Zerodha Kite broker |
-| 4 — Scale | Planned | Multi-strategy portfolio, regime detection, Langfuse dashboards |
+| **2a — Evolution Loop** | **Complete** | LLM mutation, `Send()` parallel backtests, AutoResearch ratchet, multi-generation cycling |
+| 2b — Evolution Depth | Deferred | OpenEvolve population dynamics, Qdrant similarity dedup, per-symbol ratchet, bootstrap significance |
+| 3 — HITL & Execution | Deferred | Telegram approval, paper trading, Zerodha Kite broker |
+| 4 — Scale | Deferred | Multi-strategy portfolio, regime detection, Langfuse dashboards |
 
 ---
 
 ## Development
 
 ```bash
-uv run pytest -q                          # run all 45 tests
-uv run pytest tests/graph/test_pipeline.py  # single test file
-uv run ruff check --fix && uv run ruff format  # lint + format
-uv run python main.py inspect <run_id>    # inspect a specific run
+uv run pytest -q                                   # run all 175 tests
+uv run pytest tests/graph/test_pipeline.py         # single test file
+uv run ruff check --fix && uv run ruff format      # lint + format
+uv run python main.py inspect <run_id>             # run metadata + failure summary
+uv run python main.py experiments --run <run_id>   # ratchet verdicts for a run
 ```
 
 ---

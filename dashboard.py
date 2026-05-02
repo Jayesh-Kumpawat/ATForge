@@ -17,7 +17,13 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from atforge.config import settings
 from atforge.storage.db import connect, init_db
-from atforge.storage.repo import top_rankings
+import json
+
+from atforge.storage.repo import (
+    get_best_sharpe_per_generation,
+    get_experiments_for_run,
+    top_rankings,
+)
 
 st.set_page_config(page_title="ATForge", page_icon="📈", layout="wide")
 
@@ -85,6 +91,24 @@ def available_signals() -> dict[str, list[Path]]:
         symbol = p.stem.split("_")[0].upper()
         result.setdefault(symbol, []).append(p)
     return result
+
+
+@st.cache_data(ttl=30)
+def load_experiments(run_id: str) -> pd.DataFrame:
+    if not settings.db_path.exists():
+        return pd.DataFrame()
+    with connect(settings.db_path) as conn:
+        rows = get_experiments_for_run(conn, run_id)
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=30)
+def load_sharpe_progression(run_id: str) -> pd.DataFrame:
+    if not settings.db_path.exists():
+        return pd.DataFrame()
+    with connect(settings.db_path) as conn:
+        rows = get_best_sharpe_per_generation(conn, run_id)
+    return pd.DataFrame(rows)
 
 
 def parse_strategy_from_path(p: Path) -> str:
@@ -196,7 +220,7 @@ def overlay_signal(
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
 st.sidebar.title("📈 ATForge")
-st.sidebar.caption("Phase 1 — Foundation")
+st.sidebar.caption("Phase 2a — Evolution Loop")
 
 db_ok = settings.db_path.exists()
 st.sidebar.markdown(
@@ -210,7 +234,7 @@ if not db_ok:
     )
     st.stop()
 
-tab_names = ["🏆 Rankings", "📊 OHLCV + Signals", "🔄 Run History", "🗄️ DB Stats"]
+tab_names = ["🏆 Rankings", "📊 OHLCV + Signals", "🔄 Run History", "🗄️ DB Stats", "🧬 Evolution"]
 tabs = st.tabs(tab_names)
 
 # ── tab 1: rankings ───────────────────────────────────────────────────────────
@@ -233,13 +257,13 @@ with tabs[0]:
         st.info("No successful backtests found. Run the pipeline first.")
     else:
         # Format for display
-        disp = df[["symbol", "strategy_name", "family", "n_trades", "sharpe", "sortino", "cagr", "win_rate", "max_drawdown", "total_return"]].copy()
+        disp = df[["symbol", "generation", "strategy_name", "family", "n_trades", "sharpe", "sortino", "cagr", "win_rate", "max_drawdown", "total_return"]].copy()
         disp["sharpe"] = disp["sharpe"].apply(lambda x: f"{x:.2f}" if x is not None else "-")
         disp["sortino"] = disp["sortino"].apply(lambda x: f"{x:.2f}" if x is not None else "-")
         disp["cagr"] = disp["cagr"].apply(lambda x: f"{float(x):.1%}" if x is not None else "-")
         disp["win_rate"] = disp["win_rate"].apply(lambda x: f"{float(x):.1%}" if x is not None else "-")
         disp = disp.rename(columns={
-            "strategy_name": "strategy", "n_trades": "trades",
+            "strategy_name": "strategy", "n_trades": "trades", "generation": "gen",
             "win_rate": "win%", "total_return": "return", "max_drawdown": "max_dd"
         })
         st.dataframe(disp, use_container_width=True, hide_index=True)
@@ -451,3 +475,124 @@ with tabs[3]:
         st.caption(f"Location: `{cache_dir}`")
     else:
         st.info("Cache directory not created yet.")
+
+# ── tab 5: evolution ──────────────────────────────────────────────────────────
+
+with tabs[4]:
+    st.header("Evolution & Ratchet Verdicts")
+
+    runs_df_evo = load_runs()
+    if runs_df_evo.empty:
+        st.info("No runs found. Run the pipeline first.")
+    else:
+        evo_run = st.selectbox(
+            "Select run",
+            runs_df_evo["run_id"].tolist(),
+            format_func=lambda r: f"{r} ({runs_df_evo.loc[runs_df_evo['run_id']==r, 'started_at'].iloc[0][:16]})",
+            key="evo_run_select",
+        )
+
+        exp_df = load_experiments(evo_run)
+        prog_df = load_sharpe_progression(evo_run)
+
+        if exp_df.empty:
+            st.info(
+                "No evolution data for this run — it was a single-pass baseline run "
+                "(max_generations=1). Run with `--max-generations 2+` to see mutations."
+            )
+        else:
+            n_accepted = int(exp_df["accepted"].sum())
+            n_rejected = len(exp_df) - n_accepted
+
+            # ── top metrics ──
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total mutations", len(exp_df))
+            m2.metric("Accepted ✓", n_accepted)
+            m3.metric("Rejected ✗", n_rejected)
+            best_delta = exp_df["delta_sharpe"].max()
+            m4.metric("Best Δsharpe", f"{best_delta:+.3f}" if best_delta is not None else "-")
+
+            st.divider()
+
+            # ── charts row ──
+            c_left, c_right = st.columns([3, 2])
+
+            with c_left:
+                if not prog_df.empty:
+                    bar_fig = go.Figure(go.Bar(
+                        x=[f"Gen {g}" for g in prog_df["generation"]],
+                        y=prog_df["best_sharpe"].astype(float),
+                        marker_color="#3fb950",
+                        text=prog_df["best_sharpe"].apply(lambda v: f"{float(v):.2f}"),
+                        textposition="outside",
+                    ))
+                    bar_fig.update_layout(
+                        title="Best Sharpe per Generation",
+                        yaxis_title="Sharpe",
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        height=300,
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        yaxis=dict(gridcolor="#2d333b"),
+                    )
+                    st.plotly_chart(bar_fig, use_container_width=True)
+
+            with c_right:
+                pie_fig = go.Figure(go.Pie(
+                    labels=["Accepted", "Rejected"],
+                    values=[n_accepted, n_rejected],
+                    marker_colors=["#3fb950", "#f85149"],
+                    hole=0.4,
+                    textinfo="label+percent",
+                ))
+                pie_fig.update_layout(
+                    title="Ratchet Verdicts",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                    height=300,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    showlegend=False,
+                )
+                st.plotly_chart(pie_fig, use_container_width=True)
+
+            st.divider()
+
+            # ── generation filter ──
+            gens = sorted(exp_df["generation"].unique().tolist())
+            gen_options = ["All"] + [str(g) for g in gens]
+            gen_filter = st.selectbox("Filter by generation", gen_options, key="evo_gen_filter")
+            filtered = exp_df if gen_filter == "All" else exp_df[exp_df["generation"] == int(gen_filter)]
+
+            # ── mutations table ──
+            st.subheader("Mutation Log")
+            tbl = filtered[[
+                "generation", "mutator", "parent_name", "child_name",
+                "delta_sharpe", "accepted", "reasoning", "composite_score",
+            ]].copy()
+
+            tbl["accepted"] = tbl["accepted"].apply(lambda v: "✓" if v else "✗")
+            tbl["delta_sharpe"] = tbl["delta_sharpe"].apply(
+                lambda v: f"{float(v):+.3f}" if v is not None else "-"
+            )
+            tbl["reasoning"] = tbl["reasoning"].apply(
+                lambda v: (v[:90] + "…") if v and len(v) > 90 else (v or "-")
+            )
+
+            def _fmt_score(raw: str | None) -> str:
+                if not raw:
+                    return "-"
+                try:
+                    d = json.loads(raw)
+                    parts = [f"Δsh={d.get('delta_sharpe', '?'):.2f}" if isinstance(d.get('delta_sharpe'), float) else "",
+                             f"Δso={d.get('delta_sortino', '?'):.2f}" if isinstance(d.get('delta_sortino'), float) else "",
+                             f"dd={d.get('dd_ratio', '?'):.2f}" if isinstance(d.get('dd_ratio'), float) else "",
+                             f"n={d.get('child_n_trades', '?')}"]
+                    return " | ".join(p for p in parts if p)
+                except Exception:
+                    return raw[:60]
+
+            tbl["composite_score"] = tbl["composite_score"].apply(_fmt_score)
+            tbl = tbl.rename(columns={
+                "generation": "gen", "parent_name": "parent", "child_name": "child",
+                "delta_sharpe": "Δsharpe", "composite_score": "scores",
+            })
+            st.dataframe(tbl, use_container_width=True, hide_index=True)

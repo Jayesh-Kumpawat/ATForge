@@ -233,10 +233,7 @@ def _build_mutators(
     enable_ollama: bool,
 ) -> list:
     """Build mutator instances. Returns empty list if no LLM providers configured."""
-    import dataclasses
-
-    # Build a temporary settings override for enable_ollama
-    eff_settings = dataclasses.replace(settings, enable_ollama=enable_ollama)  # type: ignore[call-arg]
+    eff_settings = settings.model_copy(update={"enable_ollama": enable_ollama})
     registry = build_default_registry(eff_settings)
     priority = llm_priority + (["ollama"] if enable_ollama else [])
     chain = registry.chain(priority)

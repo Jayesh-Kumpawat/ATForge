@@ -141,6 +141,7 @@ def top_rankings(
         SELECT
             b.backtest_id, b.run_id, b.symbol,
             s.name AS strategy_name, s.family,
+            b.generation,
             b.n_trades, b.total_return, b.final_value, b.max_drawdown,
             b.sharpe, b.sortino, b.cagr, b.win_rate
         FROM backtest_runs b
@@ -226,5 +227,48 @@ def get_top_strategies_for_generation(
         LIMIT ?
         """,
         (run_id, generation, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_experiments_for_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+) -> list[dict[str, Any]]:
+    """Return all ratchet verdicts for a run, joined with strategy names."""
+    rows = conn.execute(
+        """
+        SELECT
+            e.experiment_id, e.generation, e.mutator,
+            e.accepted, e.delta_sharpe, e.reasoning, e.composite_score,
+            e.mutation_json, e.created_at,
+            p.name AS parent_name,
+            c.name AS child_name,
+            e.parent_strategy_id, e.child_strategy_id
+        FROM experiments e
+        LEFT JOIN strategies p ON p.strategy_id = e.parent_strategy_id
+        LEFT JOIN strategies c ON c.strategy_id = e.child_strategy_id
+        WHERE e.run_id = ?
+        ORDER BY e.generation, e.experiment_id
+        """,
+        (run_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_best_sharpe_per_generation(
+    conn: sqlite3.Connection,
+    run_id: str,
+) -> list[dict[str, Any]]:
+    """Return best Sharpe achieved per generation — used for the progression chart."""
+    rows = conn.execute(
+        """
+        SELECT generation, MAX(sharpe) AS best_sharpe, COUNT(*) AS n_backtests
+        FROM backtest_runs
+        WHERE run_id = ? AND success = 1
+        GROUP BY generation
+        ORDER BY generation
+        """,
+        (run_id,),
     ).fetchall()
     return [dict(r) for r in rows]

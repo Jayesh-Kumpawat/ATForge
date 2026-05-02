@@ -53,9 +53,9 @@ _COMPOSITION_SYSTEM = (
     "Reply ONLY with a valid JSON object — no markdown fences, no extra text."
 )
 
-_SMA_SCHEMA = '{"fast": <int 2-50>, "slow": <int 10-200 and > fast>, "reasoning": "<str>"}'
-_RSI_SCHEMA = '{"period": <int 2-50>, "oversold": <int 10-45>, "reasoning": "<str>"}'
-_COMP_SCHEMA = '{"op": "AND" | "OR", "reasoning": "<str>"}'
+_SMA_SCHEMA = '{"fast": <int 2-50>, "slow": <int 10-200 and > fast>, "reasoning": "<one sentence>"}'
+_RSI_SCHEMA = '{"period": <int 2-50>, "oversold": <int 10-45>, "reasoning": "<one sentence>"}'
+_COMP_SCHEMA = '{"op": "AND" | "OR", "reasoning": "<one sentence>"}'
 
 
 def sma_param_delta_prompt(

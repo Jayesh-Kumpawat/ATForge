@@ -117,6 +117,7 @@ class ParamDeltaMutator:
             system=get_system_prompt("sma"),
             model=self._model,
             temperature=self._temperature,
+            max_tokens=1024,
             trace_name="param_delta_sma",
         ))
         try:
@@ -151,6 +152,7 @@ class ParamDeltaMutator:
             system=get_system_prompt("rsi"),
             model=self._model,
             temperature=self._temperature,
+            max_tokens=1024,
             trace_name="param_delta_rsi",
         ))
         try:

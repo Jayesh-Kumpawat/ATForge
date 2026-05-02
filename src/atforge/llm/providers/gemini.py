@@ -83,6 +83,7 @@ class GeminiProvider:
             "generationConfig": {
                 "temperature": request.temperature,
                 "maxOutputTokens": request.max_tokens,
+                "thinkingConfig": {"thinkingBudget": 0},
             },
         }
         if request.system:

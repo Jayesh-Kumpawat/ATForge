@@ -126,6 +126,7 @@ class CompositionMutator:
             system=get_system_prompt("composition"),
             model=self._model,
             temperature=self._temperature,
+            max_tokens=1024,
             trace_name="composition_mutator",
         ))
         try:
