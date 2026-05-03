@@ -17,6 +17,7 @@ from atforge.data.protocol import DataProvider
 from atforge.data.providers.jugaad import JugaadProvider
 from atforge.data.providers.openchart import OpenchartProvider
 from atforge.data.providers.yfinance import YFinanceProvider
+from atforge.evolution.types import RatchetThresholds
 from atforge.graph.deps import PipelineDeps
 from atforge.graph.pipeline import build_pipeline
 from atforge.llm.registry import build_default_registry
@@ -111,6 +112,13 @@ def pipeline(
         init_cash=Decimal("100000"),
         mutators=tuple(mutator_list),
         top_n_parents=top_n_parents,
+        ratchet_thresholds=RatchetThresholds(
+            min_delta_sharpe=settings.ratchet_min_delta_sharpe,
+            min_delta_sortino=settings.ratchet_min_delta_sortino,
+            max_drawdown_tol=settings.ratchet_max_drawdown_tol,
+            min_n_trades=settings.ratchet_min_n_trades,
+            max_symbol_regression=settings.ratchet_max_symbol_regression,
+        ),
     )
     graph = build_pipeline(deps)
     run_id = uuid4().hex[:12]

@@ -5,7 +5,7 @@ All mutators, the ratchet, and graph nodes import from here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Protocol, TypedDict, runtime_checkable
 
@@ -64,6 +64,8 @@ class EvaluationResult:
     total_n_trades: int
     max_drawdown: Decimal  # max across symbols — stays Decimal, no float
     n_symbols: int
+    # symbol → sharpe map for per-symbol regression check (empty = pre-Phase-2b data)
+    per_symbol_sharpe: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,9 @@ class RatchetThresholds:
     min_delta_sortino: float = 0.02
     max_drawdown_tol: float = 0.10  # child_dd <= parent_dd * (1 + tol)
     min_n_trades: int = 5
+    # Per-symbol guard: reject if any symbol's Sharpe regresses by more than this.
+    # Set to float("inf") to disable. Only active when per_symbol_sharpe is populated.
+    max_symbol_regression: float = 0.5
 
 
 @dataclass(frozen=True)

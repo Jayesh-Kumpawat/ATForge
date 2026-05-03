@@ -24,7 +24,7 @@ def build_evaluation_result(
     """
     rows = conn.execute(
         """
-        SELECT sharpe, sortino, n_trades, max_drawdown
+        SELECT symbol, sharpe, sortino, n_trades, max_drawdown
         FROM backtest_runs
         WHERE strategy_id=? AND run_id=? AND generation=? AND success=1
         """,
@@ -38,6 +38,11 @@ def build_evaluation_result(
     sortinos = [r["sortino"] for r in rows if r["sortino"] is not None]
     n_trades = sum(r["n_trades"] for r in rows)
     drawdowns = [Decimal(r["max_drawdown"]) for r in rows if r["max_drawdown"] is not None]
+    per_symbol_sharpe = {
+        r["symbol"]: r["sharpe"]
+        for r in rows
+        if r["symbol"] is not None and r["sharpe"] is not None
+    }
 
     return EvaluationResult(
         strategy_id=strategy_id,
@@ -48,6 +53,7 @@ def build_evaluation_result(
         total_n_trades=n_trades,
         max_drawdown=max(drawdowns) if drawdowns else Decimal("0"),
         n_symbols=len(rows),
+        per_symbol_sharpe=per_symbol_sharpe,
     )
 
 
@@ -71,7 +77,21 @@ def judge_mutation(
     dd_ok = dd_ratio <= (1.0 + thresholds.max_drawdown_tol)
     trades_ok = child.total_n_trades >= thresholds.min_n_trades
 
-    accepted = sharpe_ok and sortino_ok and dd_ok and trades_ok
+    # Per-symbol regression guard: reject if any shared symbol degrades too much.
+    # Only fires when both parent and child have per_symbol_sharpe populated.
+    worst_regression: float = 0.0
+    regressed_symbol: str | None = None
+    symbol_ok = True
+    shared_symbols = set(parent.per_symbol_sharpe) & set(child.per_symbol_sharpe)
+    for sym in shared_symbols:
+        sym_delta = child.per_symbol_sharpe[sym] - parent.per_symbol_sharpe[sym]
+        if sym_delta < -thresholds.max_symbol_regression:
+            if abs(sym_delta) > abs(worst_regression):
+                worst_regression = sym_delta
+                regressed_symbol = sym
+            symbol_ok = False
+
+    accepted = sharpe_ok and sortino_ok and dd_ok and trades_ok and symbol_ok
 
     composite_score = {
         "delta_sharpe": delta_sharpe,
@@ -82,6 +102,8 @@ def judge_mutation(
         "sortino_ok": float(sortino_ok),
         "dd_ok": float(dd_ok),
         "trades_ok": float(trades_ok),
+        "symbol_ok": float(symbol_ok),
+        "worst_symbol_regression": worst_regression,
     }
 
     reasons: list[str] = []
@@ -93,6 +115,11 @@ def judge_mutation(
         reasons.append(f"dd_ratio={dd_ratio:.2f}>{1+thresholds.max_drawdown_tol:.2f}")
     if not trades_ok:
         reasons.append(f"n_trades={child.total_n_trades}<{thresholds.min_n_trades}")
+    if not symbol_ok and regressed_symbol:
+        reasons.append(
+            f"symbol_regression={regressed_symbol}:{worst_regression:.3f}"
+            f"<-{thresholds.max_symbol_regression}"
+        )
 
     return RatchetVerdict(
         accepted=accepted,

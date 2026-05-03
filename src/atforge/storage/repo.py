@@ -137,17 +137,30 @@ def top_rankings(
         where.append("run_id = ?")
         params.append(run_id)
 
+    # Dedup: one row per (symbol, strategy) — keep the highest-Sharpe result.
+    # Without this, multi-generation runs show the same baseline strategy once per
+    # generation it was tested in, cluttering the rankings with identical rows.
     sql = f"""
-        SELECT
-            b.backtest_id, b.run_id, b.symbol,
-            s.name AS strategy_name, s.family,
-            b.generation,
-            b.n_trades, b.total_return, b.final_value, b.max_drawdown,
-            b.sharpe, b.sortino, b.cagr, b.win_rate
-        FROM backtest_runs b
-        JOIN strategies s ON s.strategy_id = b.strategy_id
-        WHERE {" AND ".join(where)}
-        ORDER BY b.sharpe DESC
+        SELECT backtest_id, run_id, symbol, strategy_name, family,
+               generation, n_trades, total_return, final_value, max_drawdown,
+               sharpe, sortino, cagr, win_rate
+        FROM (
+            SELECT
+                b.backtest_id, b.run_id, b.symbol,
+                s.name AS strategy_name, s.family,
+                b.generation,
+                b.n_trades, b.total_return, b.final_value, b.max_drawdown,
+                b.sharpe, b.sortino, b.cagr, b.win_rate,
+                ROW_NUMBER() OVER (
+                    PARTITION BY b.symbol, b.strategy_id
+                    ORDER BY b.sharpe DESC
+                ) AS rn
+            FROM backtest_runs b
+            JOIN strategies s ON s.strategy_id = b.strategy_id
+            WHERE {" AND ".join(where)}
+        )
+        WHERE rn = 1
+        ORDER BY sharpe DESC
         LIMIT ?
     """
     params.append(limit)

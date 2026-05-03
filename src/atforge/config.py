@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     qdrant_url: str | None = None
     qdrant_api_key: str | None = None
 
+    # Ratchet thresholds (override via env or .env)
+    ratchet_min_delta_sharpe: float = 0.05
+    ratchet_min_delta_sortino: float = 0.02
+    ratchet_max_drawdown_tol: float = 0.10
+    ratchet_min_n_trades: int = 5
+    ratchet_max_symbol_regression: float = 0.5
+
     def ensure_dirs(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)

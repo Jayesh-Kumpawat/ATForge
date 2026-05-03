@@ -474,16 +474,27 @@ flowchart LR
         p1a --> p1b --> p1c --> p1d
     end
 
-    subgraph P2["Phase 2 — Evolution"]
+    subgraph P2a["Phase 2a — Evolution Loop  COMPLETE"]
         direction TB
-        p2a["LLM mutation loop\nGemini 2.5 Flash primary\nGroq burst + Ollama fallback"]
-        p2b["OpenEvolve integration\nAlphaEvolve-style population"]
-        p2c["AutoResearch ratchet\ntry mutation → measure → commit or revert"]
-        p2d["Qdrant RAG\nstrategy embeddings\nfind similar past experiments"]
-        p2e["LangGraph Send API\nparallel backtest fan-out"]
+        p2a["LLM mutation loop\nGemini 2.5 Flash primary\nGroq burst + OpenRouter + Ollama fallback"]
+        p2c["AutoResearch ratchet\n5-gate acceptance criterion\nΔsharpe Δsortino dd_ratio n_trades symbol_guard"]
+        p2e["LangGraph Send API\nparallel backtest fan-out\nN workers per generation"]
         p2f["Langfuse tracing\nevery LLM call traced"]
-        p2a --> p2b --> p2c
-        p2d --> p2c
+        p2g["ParamDeltaMutator\nSMA + RSI param changes"]
+        p2h["CompositionMutator\nAND/OR of top-2 parents"]
+        p2i["experiments table\naccept/reject + composite_score JSON"]
+        p2j["Dashboard evolution tab\nSharpe progression + ratchet pie"]
+        p2a --> p2c
+        p2g & p2h --> p2c
+    end
+
+    subgraph P2b["Phase 2b — Evolution Scale  DEFERRED"]
+        direction TB
+        p2b["OpenEvolve population\nIsland-based diversity management"]
+        p2d["Qdrant similarity dedup\nembeddings to skip near-duplicates"]
+        p2k["Bootstrap significance\nstatistical gate in ratchet"]
+        p2l["Per-symbol ratchet\nfull per-symbol pass/fail"]
+        p2m["Structural patterns\ncup-and-handle H&S double tops"]
     end
 
     subgraph P3["Phase 3 — HITL and Execution"]
@@ -503,10 +514,11 @@ flowchart LR
         p4d["GitHub cleanup\ntechnical writeup"]
     end
 
-    P1 --> P2 --> P3 --> P4
+    P1 --> P2a --> P2b --> P3 --> P4
 
     style P1 fill:#f0fdf4,stroke:#22c55e,stroke-width:2px
-    style P2 fill:#eff6ff,stroke:#4a9eed,stroke-width:2px
+    style P2a fill:#f0fdf4,stroke:#22c55e,stroke-width:2px
+    style P2b fill:#eff6ff,stroke:#4a9eed,stroke-width:2px
     style P3 fill:#fff7ed,stroke:#f59e0b,stroke-width:2px
     style P4 fill:#fdf4ff,stroke:#8b5cf6,stroke-width:2px
 ```
@@ -524,7 +536,8 @@ Downloads daily OHLCV data for NSE Nifty 50 stocks, detects chart patterns progr
 | Phase | Status | Scope |
 |---|---|---|
 | 1 — Foundation | **Complete** | Data → Detect → Backtest → Rank → Dashboard |
-| 2 — Evolution | Planned | LLM mutation + OpenEvolve + Qdrant RAG + parallel fan-out |
+| 2a — Evolution Loop | **Complete** | LLM mutation + Send fan-out + ratchet + multi-gen loop |
+| 2b — Evolution Scale | Deferred | OpenEvolve population + Qdrant dedup + bootstrap significance |
 | 3 — HITL & Execution | Planned | Telegram approval + paper trading + Kite broker |
 | 4 — Scale | Planned | Multi-strategy portfolio + regime-aware selection |
 
@@ -699,28 +712,40 @@ class PipelineState(TypedDict, total=False):
     universe: list[str]
     start_iso: str
     end_iso: str
+    generation: int                     # current generation (0-based); Phase 2a
+    max_generations: int                # stop when generation >= this; Phase 2a
+    detector_configs: list[dict]        # last-writer-wins; Phase 2a
     data_refs: dict[str, str]          # {symbol: "/abs/path/to.parquet"}
-    signal_refs: list[SignalRef]        # one per (symbol, detector)
-    backtest_ids: list[int]            # rowids in backtest_runs
-    failures: list[dict]               # {node, symbol, reason}
+    signal_refs: Annotated[list[SignalRef], operator.add]  # reducer — delta-only
+    backtest_ids: Annotated[list[int], operator.add]       # reducer — delta-only
+    failures: Annotated[list[dict], operator.add]          # reducer — delta-only
+    mutations: Annotated[list[dict], operator.add]         # reducer — delta-only; Phase 2a
 ```
 
 **The IDs-only invariant**: Never put DataFrames, arrays, or Portfolio objects in state. LangGraph checkpoints state on every node transition. A 50-symbol OHLCV DataFrame at 10 years = ~15MB. With 5 nodes × 50 symbols that's 3.75GB of checkpoint data. Parquet paths are 50 bytes.
+
+**Reducers vs last-writer-wins**: `signal_refs`, `backtest_ids`, `failures`, `mutations` use `operator.add` — each node returns only the NEW items it produced. `detector_configs` is last-writer-wins — `advance_generation` overwrites it each loop with accepted child configs.
 
 **`PipelineDeps`** — frozen dataclass injected at graph construction:
 ```python
 @dataclass(frozen=True)
 class PipelineDeps:
     data_provider: DataProvider
-    detectors: tuple[PatternDetector, ...]
+    detectors: tuple[PatternDetector, ...]  # seeds generation 0 only
     ohlcv_cache_dir: Path
     signal_cache_dir: Path
     db_path: Path
-    hold_bars: int = 10
+    hold_bars: int = 5
     init_cash: Decimal = Decimal("100000")
     fees: float = 0.0003
     slippage: float = 0.0005
+    # Phase 2a additions:
+    mutators: tuple[Mutator, ...] = ()
+    ratchet_thresholds: RatchetThresholds = field(default_factory=RatchetThresholds)
+    top_n_parents: int = 5
 ```
+
+Note: `deps.detectors` seeds `state["detector_configs"]` on generation 0 only. In subsequent generations, `advance_generation` overwrites `detector_configs` with accepted child configs. Node code always reads from `state["detector_configs"]`, never from `deps.detectors`.
 
 **Node factory pattern** — nodes are closures over `deps`:
 ```python
@@ -738,10 +763,19 @@ This makes testing trivial: `make_fetch_data(PipelineDeps(data_provider=Syntheti
 START → load_universe → fetch_data → detect_patterns → run_backtest → rank → END
 ```
 
-**Phase 2 evolution** (no refactor needed):
-- Fan-out: `detect_patterns` → `Send("run_backtest", {"signal_ref": ref})` per signal
-- HITL: `build_pipeline(deps, interrupt_before=["rank"])` — operator reviews before ranking
-- LLM nodes: new nodes calling `llm/client.py` plug in between `rank` and `END`
+**Phase 2a graph** (evolution loop with Send fan-out — already built):
+```
+START → load_universe → fetch_data → detect_patterns
+  → [Send×N] run_backtest_one   ← parallel per signal_ref
+  → rank → mutate_strategies → ratchet_node
+  → loop_decision
+      "continue" → advance_generation → detect_patterns  (loop back)
+      "stop"     → END
+```
+
+`max_generations=1` (default) means `loop_decision` always returns `"stop"` — identical behavior to Phase 1. `max_generations=N` runs N generations of evolution.
+
+**Phase 3 HITL** (planned): `build_pipeline(deps, interrupt_before=["rank"])` — checkpoints between ratchet and ranking for human review. Cheap because state is IDs only.
 
 ---
 
@@ -886,12 +920,27 @@ with connect(db_path) as conn:
 
 **`top_rankings(conn, limit, run_id)`** — the query powering Tab 1 of dashboard:
 ```sql
-SELECT b.*, s.name strategy_name, s.family, s.params_json
-FROM backtest_runs b
-JOIN strategies s USING(strategy_id)
-WHERE b.success = 1
-  AND (? IS NULL OR b.run_id = ?)
-ORDER BY b.sharpe DESC
+-- ROW_NUMBER() dedup: one row per (symbol, strategy) — keeps highest Sharpe only.
+-- Without this, multi-generation runs show the same baseline strategy once per
+-- generation it was tested in, cluttering rankings with near-identical rows.
+SELECT backtest_id, run_id, symbol, strategy_name, family,
+       generation, n_trades, total_return, final_value, max_drawdown,
+       sharpe, sortino, cagr, win_rate
+FROM (
+    SELECT b.backtest_id, b.run_id, b.symbol,
+           s.name AS strategy_name, s.family,
+           b.generation, b.n_trades, b.total_return, b.final_value, b.max_drawdown,
+           b.sharpe, b.sortino, b.cagr, b.win_rate,
+           ROW_NUMBER() OVER (
+               PARTITION BY b.symbol, b.strategy_id
+               ORDER BY b.sharpe DESC
+           ) AS rn
+    FROM backtest_runs b
+    JOIN strategies s ON s.strategy_id = b.strategy_id
+    WHERE b.success = 1 AND (? IS NULL OR b.run_id = ?)
+)
+WHERE rn = 1
+ORDER BY sharpe DESC
 LIMIT ?
 ```
 
@@ -949,32 +998,52 @@ Pure functions over TypedDict state are trivially testable. No mocking required 
 ## Useful Commands
 
 ```bash
-# Run full pipeline
+# Single-pass baseline (equivalent to Phase 1)
 uv run python main.py pipeline --symbols RELIANCE,TCS,INFY --lookback 1y
 
 # Single symbol quick test
 uv run python main.py pipeline --symbols RELIANCE --lookback 6m
 
-# View rankings
-uv run python main.py rank --top 20
+# 3-generation evolution run
+uv run python main.py pipeline --symbols RELIANCE,TCS --lookback 1y \
+  --max-generations 3 --mutators param_delta,composition --top-n-parents 5
 
-# Inspect a run
+# Dry-run (ratchet fires but skips experiments table writes)
+uv run python main.py pipeline --symbols RELIANCE --max-generations 2 --dry-run
+
+# LLM provider control
+uv run python main.py pipeline --symbols RELIANCE \
+  --llm-priority gemini,groq,openrouter --enable-ollama false
+
+# Show ratchet verdicts for a run
+uv run python main.py experiments --run <run_id>
+
+# View rankings
+uv run python main.py rank --top 20 --run <run_id>
+
+# Inspect a run (metadata + failure summary)
 uv run python main.py inspect <run_id>
 
-# Dashboard
+# Dashboard (5 tabs: Rankings, OHLCV+Signals, Run History, DB Stats, Evolution)
 uv run streamlit run dashboard.py
 
 # DB web UI
 uvx datasette data/atforge.db
 
-# Tests (45 pass in Phase 1)
+# Tests (175 pass in Phase 2a)
 uv run pytest -q
 
 # Lint + format
 uv run ruff check --fix && uv run ruff format
 
-# Raw SQL
+# Raw SQL — top strategies
 sqlite3 data/atforge.db "SELECT symbol, sharpe FROM backtest_runs b JOIN strategies s USING(strategy_id) WHERE success=1 ORDER BY sharpe DESC LIMIT 10;"
+
+# Raw SQL — accepted mutations
+sqlite3 data/atforge.db "SELECT * FROM experiments WHERE accepted=1 ORDER BY delta_sharpe DESC;"
+
+# Raw SQL — generation breakdown
+sqlite3 data/atforge.db "SELECT generation, COUNT(*) FROM backtest_runs WHERE run_id='<run_id>' GROUP BY generation;"
 ```
 
 ---
@@ -1186,16 +1255,27 @@ Reducer fields: each node returns only its NEW items. LangGraph merges via `oper
 
 ### Ratchet acceptance criterion
 
-Child is accepted if **all four** conditions hold:
+Child is accepted if **all five** conditions hold:
 
 ```
-child.mean_sharpe - parent.mean_sharpe  ≥  min_delta_sharpe   (default 0.05)
-child.mean_sortino - parent.mean_sortino ≥  min_delta_sortino  (default 0.02)
-child.max_drawdown / parent.max_drawdown ≤  max_dd_ratio       (default 1.10)
-child.total_n_trades                     ≥  min_n_trades       (default 5)
+child.mean_sharpe - parent.mean_sharpe   ≥  min_delta_sharpe        (default 0.05)
+child.mean_sortino - parent.mean_sortino ≥  min_delta_sortino        (default 0.02)
+child.max_drawdown / parent.max_drawdown ≤  1 + max_drawdown_tol    (default 1.10)
+child.total_n_trades                     ≥  min_n_trades             (default 5)
+per-symbol regression guard              ≤  max_symbol_regression    (default 0.5)
+  → reject if any shared symbol's Sharpe drops by more than 0.5 vs parent
+  → only fires when per_symbol_sharpe is populated for both parent and child
+  → set max_symbol_regression=inf to disable
 ```
 
-`composite_score` (stored as JSON in `experiments` table): `{delta_sharpe, delta_sortino, dd_ratio, child_n_trades}`.
+`composite_score` (stored as JSON in `experiments` table):
+```
+{delta_sharpe, delta_sortino, dd_ratio, child_n_trades,
+ sharpe_ok, sortino_ok, dd_ok, trades_ok, symbol_ok,
+ worst_symbol_regression}
+```
+
+`build_evaluation_result` aggregates across symbols: AVG(sharpe), AVG(sortino), SUM(n_trades), MAX(max_drawdown), plus a `per_symbol_sharpe` dict `{symbol: sharpe}` used by the per-symbol regression guard. Phase 2b promotes this to a full per-symbol ratchet with bootstrap significance.
 
 `build_evaluation_result` aggregates across symbols: AVG(sharpe), AVG(sortino), SUM(n_trades), MAX(max_drawdown). Phase 2b adds per-symbol ratchet with bootstrap significance.
 

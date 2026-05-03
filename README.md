@@ -41,7 +41,7 @@ CLI (Typer)
 Storage: SQLite (WAL + JSON1 + FTS5) — 5 tables + experiments table (ratchet verdicts)
 LLMs:    Gemini 2.5 Flash (primary) → Groq (burst) → OpenRouter → Ollama Qwen2.5-Coder (fallback)
 Traces:  Langfuse Cloud — every LLM call traced with prompt, response, provider, latency
-Dashboard: Streamlit 4-tab — Rankings | OHLCV+Signals | Run History | DB Stats
+Dashboard: Streamlit 5-tab — Rankings | OHLCV+Signals | Run History | DB Stats | Evolution
 ```
 
 Full architecture with Mermaid diagrams → [`ARCHITECTURE.md`](ARCHITECTURE.md)
@@ -77,7 +77,7 @@ Full architecture with Mermaid diagrams → [`ARCHITECTURE.md`](ARCHITECTURE.md)
 | Runtime LLMs | Gemini 2.5 Flash + Groq + OpenRouter + Ollama | 5,000+ free requests/day, provider fallback chain |
 | Observability | Langfuse Cloud | LLM call tracing, every prompt/response logged |
 | Evolution engine | AutoResearch ratchet (Phase 2a) | Δsharpe/Δsortino/drawdown acceptance criterion |
-| Dashboard | Streamlit | 4 tabs, Plotly candlestick charts |
+| Dashboard | Streamlit | 5 tabs, Plotly candlestick charts + evolution charts |
 | CLI | Typer | `pipeline`, `rank`, `inspect` commands |
 
 ---
@@ -108,7 +108,7 @@ uv run python main.py experiments --run <run_id>
 # View rankings across all runs
 uv run python main.py rank --top 20
 
-# Dashboard (Rankings | OHLCV+Signals | Run History | DB Stats)
+# Dashboard (Rankings | OHLCV+Signals | Run History | DB Stats | Evolution)
 uv run streamlit run dashboard.py
 
 # Browse raw DB — all tables, full experiment log
@@ -122,7 +122,7 @@ uvx datasette data/atforge.db
 ```
 ATForge/
 ├── main.py                     Entry point
-├── dashboard.py                Streamlit 4-tab dashboard
+├── dashboard.py                Streamlit 5-tab dashboard
 ├── src/atforge/
 │   ├── config.py               pydantic-settings, .env loading
 │   ├── cli.py                  Typer CLI (pipeline, rank, inspect)
@@ -133,7 +133,7 @@ ATForge/
 │   ├── graph/                  LangGraph state, deps, nodes (Phase 1), nodes_phase2 (evolution loop)
 │   ├── llm/                    Provider registry, router, Langfuse tracing
 │   └── evolution/              Mutators (param_delta, composition), ratchet, detector registry
-├── tests/                      45 tests — E2E, unit, integration
+├── tests/                      182 tests — E2E, unit, integration
 ├── ARCHITECTURE.md             6 Mermaid diagrams covering every component
 └── CONTEXT.md                  Full vision, tool choices, phase plan
 ```
@@ -152,10 +152,65 @@ ATForge/
 
 ---
 
+## Dashboard tabs
+
+| Tab | What it shows |
+|-----|--------------|
+| **🏆 Rankings** | Top backtests across all runs — symbol, strategy, gen, Sharpe, CAGR, max drawdown, win rate |
+| **📊 OHLCV + Signals** | Candlestick chart for any symbol/run with pattern signal bars highlighted in orange |
+| **🔄 Run History** | All pipeline runs — status, duration, backtest counts, failures |
+| **🗄️ DB Stats** | Row counts per table, strategy families breakdown |
+| **🧬 Evolution** | Sharpe-by-generation bar chart, accept/reject pie, full mutations table with Δsharpe and ratchet reasoning |
+
+---
+
+## Testing & verification
+
+### 1 — Automated test suite
+```bash
+uv run pytest -q
+# Expect: 182 passed
+```
+
+### 2 — Run a 2-generation evolution (end-to-end smoke test)
+```bash
+uv run python main.py pipeline \
+  --symbols RELIANCE,TCS \
+  --lookback 6m \
+  --max-generations 2 \
+  --mutators param_delta,composition \
+  --top-n-parents 3
+# Note the run_id printed at start (e.g. "run abc123def456")
+```
+
+### 3 — Verify CLI outputs
+```bash
+uv run python main.py rank --top 20         # gen column appears next to symbol
+uv run python main.py experiments --run <run_id>  # ratchet verdicts: ✓ accepted / ✗ rejected
+uv run python main.py inspect <run_id>      # run metadata + failure count
+```
+
+### 4 — Dashboard verification
+```bash
+uv run streamlit run dashboard.py
+```
+- **Rankings tab**: "gen" column visible (gen=0 = baseline, gen≥1 = evolved)
+- **OHLCV tab**: candlestick loads, orange signal overlays appear on signal days
+- **Evolution tab**: select the run from step 2 → Sharpe bar chart shows gen 0 and gen 1, pie shows accepted/rejected count, mutations table shows full ratchet reasoning
+- **Edge case**: select a single-pass run (no `--max-generations`) → "No evolution data" message appears
+
+### 5 — Browse raw DB
+```bash
+uvx datasette data/atforge.db
+# All 5 tables browsable in browser: runs, strategies, pattern_signals, backtest_runs, experiments
+```
+
+---
+
 ## Development
 
 ```bash
-uv run pytest -q                                   # run all 175 tests
+uv run pytest -q                                   # run all 182 tests
 uv run pytest tests/graph/test_pipeline.py         # single test file
 uv run ruff check --fix && uv run ruff format      # lint + format
 uv run python main.py inspect <run_id>             # run metadata + failure summary
