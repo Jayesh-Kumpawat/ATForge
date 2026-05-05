@@ -8,17 +8,28 @@ The dispatcher returns one `Send` per `signal_ref` so workers run in parallel; e
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from typing import Any
 
 import pandas as pd
+import structlog
 from langgraph.types import Send
 
 from atforge.backtest.engine import run_backtest
 from atforge.evolution.ratchet import build_evaluation_result, judge_mutation
 from atforge.evolution.registry import build_detector_from_config
 from atforge.graph.deps import PipelineDeps
+from atforge.graph.events import (
+    EvtBacktestDone,
+    EvtGenerationDone,
+    EvtMutationProposed,
+    EvtNodeDone,
+    EvtNodeStart,
+    EvtRatchetVerdict,
+)
 from atforge.graph.state import PipelineState
+from atforge.llm.tracing import trace_node
 from atforge.storage.db import connect, txn
 from atforge.storage.repo import (
     get_top_strategies_for_generation,
@@ -26,6 +37,8 @@ from atforge.storage.repo import (
     insert_experiment,
     upsert_strategy,
 )
+
+log = structlog.get_logger(__name__)
 
 
 def make_run_backtest_dispatcher() -> Callable[[PipelineState], list[Send]]:
@@ -48,58 +61,92 @@ def make_run_backtest_one(deps: PipelineDeps) -> Callable[[dict[str, Any]], dict
         ref = state["ref"]
         run_id = state["run_id"]
         generation = ref.get("generation", 0)
+        symbol = ref["symbol"]
+        strategy = ref["strategy_name"]
+        bus = deps.event_bus
         new_backtest_ids: list[int] = []
         new_failures: list[dict[str, Any]] = []
 
-        try:
-            ohlcv = pd.read_parquet(ref["ohlcv_parquet"])
-            sig = pd.read_parquet(ref["signal_parquet"])["signal"].astype(bool)
-        except Exception as exc:
-            new_failures.append(
-                {
-                    "node": "run_backtest",
-                    "symbol": ref["symbol"],
-                    "strategy": ref["strategy_name"],
-                    "reason": f"read: {exc}",
-                }
-            )
-            return {"backtest_ids": new_backtest_ids, "failures": new_failures}
+        with trace_node(
+            "run_backtest_one",
+            enabled=deps.tracing_enabled,
+            metadata={"symbol": symbol, "strategy": strategy, "generation": generation},
+        ):
+            try:
+                ohlcv = pd.read_parquet(ref["ohlcv_parquet"])
+                sig = pd.read_parquet(ref["signal_parquet"])["signal"].astype(bool)
+            except Exception as exc:
+                log.warning(
+                    "backtest_read_failed", symbol=symbol, strategy=strategy, error=str(exc)
+                )
+                new_failures.append(
+                    {
+                        "node": "run_backtest",
+                        "symbol": symbol,
+                        "strategy": strategy,
+                        "reason": f"read: {exc}",
+                    }
+                )
+                if bus:
+                    bus.emit(EvtBacktestDone(symbol=symbol, strategy=strategy, success=False))
+                return {"backtest_ids": new_backtest_ids, "failures": new_failures}
 
-        result = run_backtest(
-            ohlcv,
-            sig,
-            symbol=ref["symbol"],
-            pattern_name=ref["strategy_name"],
-            init_cash=deps.init_cash,
-            hold_bars=deps.hold_bars,
-            fees=deps.fees,
-            slippage=deps.slippage,
-        )
-
-        with connect(deps.db_path) as conn, txn(conn):
-            bid = insert_backtest_result(
-                conn,
-                run_id=run_id,
-                signal_id=ref["signal_id"],
-                strategy_id=ref["strategy_id"],
-                result=result,
+            result = run_backtest(
+                ohlcv,
+                sig,
+                symbol=symbol,
+                pattern_name=strategy,
+                init_cash=deps.init_cash,
                 hold_bars=deps.hold_bars,
                 fees=deps.fees,
                 slippage=deps.slippage,
-                init_cash=deps.init_cash,
-                generation=generation,
             )
 
-        new_backtest_ids.append(bid)
-        if not result.success:
-            new_failures.append(
-                {
-                    "node": "run_backtest",
-                    "symbol": ref["symbol"],
-                    "strategy": ref["strategy_name"],
-                    "reason": result.reason,
-                }
-            )
+            with connect(deps.db_path) as conn, txn(conn):
+                bid = insert_backtest_result(
+                    conn,
+                    run_id=run_id,
+                    signal_id=ref["signal_id"],
+                    strategy_id=ref["strategy_id"],
+                    result=result,
+                    hold_bars=deps.hold_bars,
+                    fees=deps.fees,
+                    slippage=deps.slippage,
+                    init_cash=deps.init_cash,
+                    generation=generation,
+                )
+
+            new_backtest_ids.append(bid)
+            sharpe_raw = result.metrics.get("sharpe") if result.success else None
+            sharpe = float(sharpe_raw) if sharpe_raw is not None else None
+            if bus:
+                bus.emit(
+                    EvtBacktestDone(
+                        symbol=symbol, strategy=strategy, success=result.success, sharpe=sharpe
+                    )
+                )
+
+            if not result.success:
+                log.warning(
+                    "backtest_failed", symbol=symbol, strategy=strategy, reason=result.reason
+                )
+                new_failures.append(
+                    {
+                        "node": "run_backtest",
+                        "symbol": symbol,
+                        "strategy": strategy,
+                        "reason": result.reason,
+                    }
+                )
+            else:
+                log.info(
+                    "backtest_ok",
+                    symbol=symbol,
+                    strategy=strategy,
+                    sharpe=sharpe,
+                    generation=generation,
+                )
+
         return {"backtest_ids": new_backtest_ids, "failures": new_failures}
 
     return run_backtest_one
@@ -115,19 +162,32 @@ def make_ratchet_node(deps: PipelineDeps) -> Callable[[PipelineState], dict[str,
     def ratchet_node(state: PipelineState) -> dict[str, Any]:
         generation = state.get("generation", 0)
         if generation == 0:
-            return {}  # nothing to compare on first pass
+            return {}
 
         run_id = state["run_id"]
         prev_gen = generation - 1
+        bus = deps.event_bus
+        t0 = time.monotonic()
 
-        # Find mutations proposed at end of the previous generation
         pending = [m for m in state.get("mutations", []) if m.get("generation") == prev_gen]
         if not pending:
             return {}
 
-        thresholds = deps.ratchet_thresholds
+        log.info("ratchet_node_start", generation=generation, n_pending=len(pending))
+        if bus:
+            bus.emit(EvtNodeStart("ratchet_node", generation))
 
-        with connect(deps.db_path) as conn:
+        thresholds = deps.ratchet_thresholds
+        n_accepted = 0
+
+        with (
+            trace_node(
+                "ratchet_node",
+                enabled=deps.tracing_enabled,
+                metadata={"generation": generation, "n_pending": len(pending)},
+            ),
+            connect(deps.db_path) as conn,
+        ):
             for mutation in pending:
                 parent_er = build_evaluation_result(
                     conn,
@@ -145,6 +205,34 @@ def make_ratchet_node(deps: PipelineDeps) -> Callable[[PipelineState], dict[str,
                     continue
 
                 verdict = judge_mutation(parent_er, child_er, thresholds)
+                if verdict.accepted:
+                    n_accepted += 1
+
+                log.info(
+                    "ratchet_verdict",
+                    accepted=verdict.accepted,
+                    delta_sharpe=round(verdict.delta_sharpe, 4),
+                    reason=verdict.reasoning,
+                    generation=generation,
+                )
+
+                if bus:
+                    # Resolve names from DB for display
+                    parent_name = mutation.get("mutator", "?")
+                    child_row = conn.execute(
+                        "SELECT name FROM strategies WHERE strategy_id=?",
+                        (mutation["child_strategy_id"],),
+                    ).fetchone()
+                    child_name = child_row["name"] if child_row else "?"
+                    bus.emit(
+                        EvtRatchetVerdict(
+                            parent_name=parent_name,
+                            child_name=child_name,
+                            accepted=verdict.accepted,
+                            delta_sharpe=verdict.delta_sharpe,
+                            reason=verdict.reasoning,
+                        )
+                    )
 
                 with txn(conn):
                     insert_experiment(
@@ -161,6 +249,18 @@ def make_ratchet_node(deps: PipelineDeps) -> Callable[[PipelineState], dict[str,
                         reasoning=verdict.reasoning,
                     )
 
+        log.info(
+            "ratchet_node_done", generation=generation, n_accepted=n_accepted, n_total=len(pending)
+        )
+        if bus:
+            bus.emit(EvtNodeDone("ratchet_node", generation, (time.monotonic() - t0) * 1000))
+            bus.emit(
+                EvtGenerationDone(
+                    generation=generation,
+                    n_backtests=len(state.get("backtest_ids", [])),
+                    n_accepted=n_accepted,
+                )
+            )
         return {}
 
     return ratchet_node
@@ -177,54 +277,79 @@ def make_mutate_strategies(deps: PipelineDeps) -> Callable[[PipelineState], dict
         generation = state.get("generation", 0)
         max_gen = state.get("max_generations", 1)
 
-        # Only mutate if there's a next generation to run
         if generation + 1 >= max_gen:
             return {}
 
         run_id = state["run_id"]
+        bus = deps.event_bus
         new_mutations: list[dict[str, Any]] = []
+        t0 = time.monotonic()
 
-        with connect(deps.db_path) as conn:
-            parents = get_top_strategies_for_generation(
-                conn,
-                run_id=run_id,
-                generation=generation,
-                limit=deps.top_n_parents,
-            )
+        if bus:
+            bus.emit(EvtNodeStart("mutate_strategies", generation))
 
-        if not parents:
-            return {}
+        with trace_node(
+            "mutate_strategies",
+            enabled=deps.tracing_enabled,
+            metadata={"generation": generation},
+        ):
+            with connect(deps.db_path) as conn:
+                parents = get_top_strategies_for_generation(
+                    conn,
+                    run_id=run_id,
+                    generation=generation,
+                    limit=deps.top_n_parents,
+                )
 
-        for mutator in deps.mutators:
-            try:
-                proposals = mutator.propose(parents, k=deps.top_n_parents)
-            except Exception:
-                continue
-            for proposal in proposals:
-                try:
-                    det = build_detector_from_config(proposal.child_config)
-                    with connect(deps.db_path) as conn, txn(conn):
-                        child_sid = upsert_strategy(
-                            conn,
-                            name=det.name,
-                            family=det.family,
-                            params=proposal.child_config,
-                        )
-                    new_mutations.append(
-                        {
-                            "generation": generation,
-                            "parent_strategy_id": proposal.parent_strategy_id,
-                            "child_strategy_id": child_sid,
-                            "mutator": proposal.mutator,
-                            "mutation_json": json.dumps(
-                                proposal.child_config, sort_keys=True
-                            ),
-                            "reasoning": proposal.reasoning,
-                        }
+            if not parents:
+                log.info("mutate_strategies_no_parents", generation=generation)
+                if bus:
+                    bus.emit(
+                        EvtNodeDone("mutate_strategies", generation, (time.monotonic() - t0) * 1000)
                     )
+                return {}
+
+            log.info("mutate_strategies_start", generation=generation, n_parents=len(parents))
+
+            for mutator in deps.mutators:
+                try:
+                    proposals = mutator.propose(parents, k=deps.top_n_parents)
                 except Exception:
                     continue
+                if bus:
+                    bus.emit(EvtMutationProposed(mutator.name, len(proposals)))
+                log.info(
+                    "mutator_proposed",
+                    mutator=mutator.name,
+                    n=len(proposals),
+                    generation=generation,
+                )
+                for proposal in proposals:
+                    try:
+                        det = build_detector_from_config(proposal.child_config)
+                        with connect(deps.db_path) as conn, txn(conn):
+                            child_sid = upsert_strategy(
+                                conn,
+                                name=det.name,
+                                family=det.family,
+                                params=proposal.child_config,
+                            )
+                        new_mutations.append(
+                            {
+                                "generation": generation,
+                                "parent_strategy_id": proposal.parent_strategy_id,
+                                "child_strategy_id": child_sid,
+                                "mutator": proposal.mutator,
+                                "mutation_json": json.dumps(proposal.child_config, sort_keys=True),
+                                "reasoning": proposal.reasoning,
+                            }
+                        )
+                    except Exception:
+                        continue
 
+        log.info("mutate_strategies_done", generation=generation, n_mutations=len(new_mutations))
+        if bus:
+            bus.emit(EvtNodeDone("mutate_strategies", generation, (time.monotonic() - t0) * 1000))
         return {"mutations": new_mutations}
 
     return mutate_strategies

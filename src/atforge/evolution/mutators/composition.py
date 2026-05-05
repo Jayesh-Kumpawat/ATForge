@@ -2,17 +2,18 @@
 
 Emits nested DetectorConfig. Bounded by max_nesting_depth to prevent explosion.
 Skips pairs where either parent is already at max nesting depth.
+Validates LLM response with up to 3 retries on parse failure.
 """
 
 from __future__ import annotations
 
 import itertools
 import json
-import re
 from collections.abc import Callable
 
 import structlog
 
+from atforge.evolution.mutators._utils import call_llm_with_schema
 from atforge.evolution.prompts import CompositionChoice, composition_prompt, get_system_prompt
 from atforge.evolution.types import DetectorConfig, ProposedMutation, StrategyRow
 from atforge.llm.types import LlmRequest, LlmResponse
@@ -26,36 +27,6 @@ def _nesting_depth(cfg: dict) -> int:
     if t in ("and", "or"):
         return 1 + max(_nesting_depth(cfg["left"]), _nesting_depth(cfg["right"]))
     return 0
-
-
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
-
-
-def _brace_match(text: str) -> str:
-    start = text.find("{")
-    if start == -1:
-        return text
-    depth = 0
-    for i, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return text[start:]
-
-
-def _parse_json(raw: str) -> dict:
-    clean = _strip_fences(raw)
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        return json.loads(_brace_match(clean))
 
 
 class CompositionMutator:
@@ -83,7 +54,7 @@ class CompositionMutator:
     ) -> list[ProposedMutation]:
         mutations: list[ProposedMutation] = []
         pairs = list(itertools.combinations(parents, 2))
-        for left_row, right_row in pairs[: k * 2]:  # pairs cap to avoid N^2 explosion
+        for left_row, right_row in pairs[: k * 2]:  # cap to avoid N^2 explosion
             try:
                 mut = self._propose_pair(left_row, right_row)
                 if mut is not None:
@@ -111,7 +82,10 @@ class CompositionMutator:
             return None
 
         # Enforce max nesting depth
-        if _nesting_depth(left_cfg) >= self._max_depth or _nesting_depth(right_cfg) >= self._max_depth:
+        if (
+            _nesting_depth(left_cfg) >= self._max_depth
+            or _nesting_depth(right_cfg) >= self._max_depth
+        ):
             log.debug("composition_depth_limit", left=left_row["name"], right=right_row["name"])
             return None
 
@@ -121,33 +95,24 @@ class CompositionMutator:
             right_name=right_row["name"],
             right_sharpe=right_row["mean_sharpe"],
         )
-        resp = self._llm(LlmRequest(
+        request = LlmRequest(
             prompt=prompt,
             system=get_system_prompt("composition"),
             model=self._model,
             temperature=self._temperature,
             max_tokens=1024,
             trace_name="composition_mutator",
-        ))
-        try:
-            data = _parse_json(resp.text)
-            choice = CompositionChoice.model_validate(data)
-        except Exception as exc:
-            log.warning("composition_parse_failed", raw=resp.text[:200], error=str(exc))
+            response_schema=CompositionChoice,
+        )
+        choice = call_llm_with_schema(self._llm, request, CompositionChoice)
+        if choice is None:
             return None
 
-        if choice.op == "AND":
-            child_config: DetectorConfig = {
-                "type": "and",
-                "left": left_cfg,
-                "right": right_cfg,
-            }
-        else:
-            child_config = {
-                "type": "or",
-                "left": left_cfg,
-                "right": right_cfg,
-            }
+        child_config: DetectorConfig = {
+            "type": "and" if choice.op == "AND" else "or",
+            "left": left_cfg,
+            "right": right_cfg,
+        }
 
         # Use the higher-Sharpe parent as the "parent_strategy_id"
         parent_row = left_row if left_row["mean_sharpe"] >= right_row["mean_sharpe"] else right_row

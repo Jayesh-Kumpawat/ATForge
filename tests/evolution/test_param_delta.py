@@ -134,3 +134,56 @@ def test_malformed_json_skipped_gracefully():
     mutator = ParamDeltaMutator(_mock_llm("not json at all"))
     mutations = mutator.propose([_sma_row()], k=1)
     assert mutations == []
+
+
+def _mock_llm_sequence(responses: list[str]):
+    """Return a callable that returns responses in order, repeating the last."""
+    calls: list[int] = [0]
+
+    def _router(req: LlmRequest) -> LlmResponse:
+        idx = min(calls[0], len(responses) - 1)
+        calls[0] += 1
+        return LlmResponse(
+            text=responses[idx],
+            model="mock",
+            provider="mock",
+            input_tokens=10,
+            output_tokens=20,
+            latency_ms=1,
+        )
+
+    return _router, calls
+
+
+def test_retry_succeeds_on_second_attempt():
+    """First LLM response is invalid JSON; second is valid — mutation succeeds."""
+    good = json.dumps({"fast": 12, "slow": 35, "reasoning": "retry worked"})
+    router, calls = _mock_llm_sequence(["not json", good])
+    mutator = ParamDeltaMutator(router)
+    mutations = mutator.propose([_sma_row()], k=1)
+    assert len(mutations) == 1
+    assert mutations[0].child_config["fast"] == 12
+    assert calls[0] == 2  # called twice: once bad, once good
+
+
+def test_retry_exhausted_calls_llm_max_retries_times():
+    """All retries return invalid JSON — LLM called max_retries times, mutation dropped."""
+    from atforge.evolution.mutators._utils import call_llm_with_schema
+    from atforge.evolution.prompts import SmaParamsDelta
+    from atforge.llm.types import LlmRequest
+
+    router, calls = _mock_llm_sequence(["not json"])
+    req = LlmRequest(prompt="p", system="s", trace_name="test")
+    result = call_llm_with_schema(router, req, SmaParamsDelta, max_retries=3)
+    assert result is None
+    assert calls[0] == 3
+
+
+def test_retry_fast_gte_slow_retries_then_drops():
+    """Pydantic rejects fast>=slow on every attempt — exhausts retries, drops mutation."""
+    bad = json.dumps({"fast": 50, "slow": 30, "reasoning": "bad"})
+    router, calls = _mock_llm_sequence([bad])
+    mutator = ParamDeltaMutator(router)
+    mutations = mutator.propose([_sma_row()], k=1)
+    assert mutations == []
+    assert calls[0] == 3  # default max_retries=3

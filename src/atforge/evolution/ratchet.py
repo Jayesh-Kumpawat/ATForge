@@ -112,7 +112,7 @@ def judge_mutation(
     if not sortino_ok:
         reasons.append(f"sortino_delta={delta_sortino:.3f}<{thresholds.min_delta_sortino}")
     if not dd_ok:
-        reasons.append(f"dd_ratio={dd_ratio:.2f}>{1+thresholds.max_drawdown_tol:.2f}")
+        reasons.append(f"dd_ratio={dd_ratio:.2f}>{1 + thresholds.max_drawdown_tol:.2f}")
     if not trades_ok:
         reasons.append(f"n_trades={child.total_n_trades}<{thresholds.min_n_trades}")
     if not symbol_ok and regressed_symbol:

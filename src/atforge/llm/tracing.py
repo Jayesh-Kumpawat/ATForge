@@ -6,6 +6,7 @@ Langfuse SDK. Production CLI passes `enabled=True` once API keys are configured.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any, Protocol, runtime_checkable
@@ -71,3 +72,38 @@ def trace_completion(
 
     with client.start_as_current_observation(**obs_kwargs) as obs:
         yield _LangfuseRecorder(obs)
+
+
+@contextmanager
+def trace_node(
+    node_name: str,
+    *,
+    enabled: bool = False,
+    client: Any | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> Iterator[None]:
+    """Wrap a pipeline node execution in a Langfuse span if `enabled`.
+
+    Usage:
+        with trace_node("fetch_data", enabled=deps.tracing_enabled, metadata={"gen": 0}):
+            ...node logic...
+    """
+    if not enabled:
+        yield
+        return
+
+    if client is None:
+        from langfuse import get_client  # lazy import — never touched in disabled path
+
+        client = get_client()
+
+    t0 = time.monotonic()
+    with client.start_as_current_observation(
+        name=f"node.{node_name}",
+        as_type="span",
+        metadata=metadata or {},
+    ) as obs:
+        yield
+        obs.update(
+            metadata={**(metadata or {}), "elapsed_ms": round((time.monotonic() - t0) * 1000)}
+        )

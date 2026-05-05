@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from atforge.data.protocol import DataProvider
 from atforge.evolution.types import Mutator, RatchetThresholds
 from atforge.patterns.base import PatternDetector
+
+if TYPE_CHECKING:
+    pass
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,10 @@ class PipelineDeps:
     mutators: tuple[Mutator, ...] = field(default_factory=tuple)
     ratchet_thresholds: RatchetThresholds = field(default_factory=RatchetThresholds)
     top_n_parents: int = 5
+
+    # Observability — both optional, off by default so existing tests need no changes
+    tracing_enabled: bool = False
+    event_bus: Any | None = None  # EventBus | None (Any avoids frozen-dataclass issues)
 
     def ensure_dirs(self) -> None:
         self.ohlcv_cache_dir.mkdir(parents=True, exist_ok=True)

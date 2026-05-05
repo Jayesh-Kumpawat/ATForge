@@ -1,18 +1,18 @@
 """ParamDeltaMutator — LLM-guided parameter mutations for indicator-family detectors.
 
 Handles SMA crossover (fast/slow) and RSI oversold (period/oversold).
-Validates LLM response via Pydantic schemas. Strips markdown fences + brace-matches
-as fallback. Returns success=False silently on parse failure (never raises).
+Validates LLM response via Pydantic schemas with up to 3 retries on parse failure.
+Returns success=False silently on exhausted retries (never raises).
 """
 
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable
 
 import structlog
 
+from atforge.evolution.mutators._utils import call_llm_with_schema
 from atforge.evolution.prompts import (
     RsiParamsDelta,
     SmaParamsDelta,
@@ -24,38 +24,6 @@ from atforge.evolution.types import DetectorConfig, ProposedMutation, StrategyRo
 from atforge.llm.types import LlmRequest, LlmResponse
 
 log = structlog.get_logger(__name__)
-
-
-def _strip_fences(text: str) -> str:
-    """Remove ```json...``` markdown fences if present."""
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
-
-
-def _brace_match(text: str) -> str:
-    """Extract the largest {...} block from text as fallback."""
-    start = text.find("{")
-    if start == -1:
-        return text
-    depth = 0
-    for i, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return text[start:]
-
-
-def _parse_json(raw: str) -> dict:
-    clean = _strip_fences(raw)
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        return json.loads(_brace_match(clean))
 
 
 class ParamDeltaMutator:
@@ -86,7 +54,9 @@ class ParamDeltaMutator:
                 if mut is not None:
                     mutations.append(mut)
             except Exception as exc:
-                log.warning("param_delta_propose_failed", strategy_id=parent["strategy_id"], error=str(exc))
+                log.warning(
+                    "param_delta_propose_failed", strategy_id=parent["strategy_id"], error=str(exc)
+                )
         return mutations
 
     def _propose_one(self, parent: StrategyRow) -> ProposedMutation | None:
@@ -112,19 +82,17 @@ class ParamDeltaMutator:
             mean_sortino=parent["mean_sortino"],
             n_trades=parent["total_n_trades"],
         )
-        resp = self._llm(LlmRequest(
+        request = LlmRequest(
             prompt=prompt,
             system=get_system_prompt("sma"),
             model=self._model,
             temperature=self._temperature,
             max_tokens=1024,
             trace_name="param_delta_sma",
-        ))
-        try:
-            data = _parse_json(resp.text)
-            validated = SmaParamsDelta.model_validate(data)
-        except Exception as exc:
-            log.warning("sma_parse_failed", raw=resp.text[:200], error=str(exc))
+            response_schema=SmaParamsDelta,
+        )
+        validated = call_llm_with_schema(self._llm, request, SmaParamsDelta)
+        if validated is None:
             return None
 
         child_config: DetectorConfig = {
@@ -147,19 +115,17 @@ class ParamDeltaMutator:
             mean_sortino=parent["mean_sortino"],
             n_trades=parent["total_n_trades"],
         )
-        resp = self._llm(LlmRequest(
+        request = LlmRequest(
             prompt=prompt,
             system=get_system_prompt("rsi"),
             model=self._model,
             temperature=self._temperature,
             max_tokens=1024,
             trace_name="param_delta_rsi",
-        ))
-        try:
-            data = _parse_json(resp.text)
-            validated = RsiParamsDelta.model_validate(data)
-        except Exception as exc:
-            log.warning("rsi_parse_failed", raw=resp.text[:200], error=str(exc))
+            response_schema=RsiParamsDelta,
+        )
+        validated = call_llm_with_schema(self._llm, request, RsiParamsDelta)
+        if validated is None:
             return None
 
         child_config: DetectorConfig = {

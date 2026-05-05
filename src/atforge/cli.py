@@ -19,10 +19,12 @@ from atforge.data.providers.openchart import OpenchartProvider
 from atforge.data.providers.yfinance import YFinanceProvider
 from atforge.evolution.types import RatchetThresholds
 from atforge.graph.deps import PipelineDeps
+from atforge.graph.events import EventBus, EvtPipelineDone, EvtPipelineStart
 from atforge.graph.pipeline import build_pipeline
 from atforge.llm.registry import build_default_registry
 from atforge.llm.router import complete_with_fallback
 from atforge.llm.types import LlmRequest
+from atforge.monitor import PipelineMonitor
 from atforge.patterns.pandas_ta import RsiOversoldReclaim, SmaCrossover
 from atforge.patterns.talib_cdl import CDL_PATTERNS, TalibCdlDetector
 from atforge.storage.db import connect, init_db
@@ -77,7 +79,10 @@ def pipeline(
         str, typer.Option(help="Comma-separated LLM provider priority")
     ] = "gemini,groq,openrouter",
     enable_ollama: Annotated[bool, typer.Option(help="Enable local Ollama provider")] = False,
-    dry_run: Annotated[bool, typer.Option(help="Skip experiment DB writes (ratchet logs only)")] = False,
+    dry_run: Annotated[
+        bool, typer.Option(help="Skip experiment DB writes (ratchet logs only)")
+    ] = False,
+    live: Annotated[bool, typer.Option(help="Show Rich live monitor during pipeline run")] = False,
 ) -> None:
     """Run the full Phase 2a pipeline end-to-end with optional LLM evolution."""
     from atforge.data.universe import load_nifty50
@@ -93,6 +98,7 @@ def pipeline(
         raise typer.BadParameter(f"unknown universe {universe!r}")
 
     settings.ensure_dirs()
+    _configure_langfuse_env()
     init_db(settings.db_path)
 
     mutator_list = _build_mutators(
@@ -102,6 +108,8 @@ def pipeline(
     )
 
     effective_max_gen = 1 if dry_run else max_generations
+    tracing_enabled = bool(settings.langfuse_public_key and settings.langfuse_secret_key)
+    bus = EventBus() if live else None
 
     deps = PipelineDeps(
         data_provider=_build_default_provider(),
@@ -119,14 +127,25 @@ def pipeline(
             min_n_trades=settings.ratchet_min_n_trades,
             max_symbol_regression=settings.ratchet_max_symbol_regression,
         ),
+        tracing_enabled=tracing_enabled,
+        event_bus=bus,
     )
     graph = build_pipeline(deps)
     run_id = uuid4().hex[:12]
 
-    console.print(
-        f"[green]run[/] {run_id} symbols={len(syms)} window={start}..{end} "
-        f"max_gen={effective_max_gen} mutators={mutators}"
-    )
+    monitor: PipelineMonitor | None = None
+    if bus is not None:
+        bus.emit(
+            EvtPipelineStart(run_id=run_id, n_symbols=len(syms), max_generations=effective_max_gen)
+        )
+        monitor = PipelineMonitor(bus, run_id=run_id, max_generations=effective_max_gen)
+        monitor.start()
+    else:
+        console.print(
+            f"[green]run[/] {run_id} symbols={len(syms)} window={start}..{end} "
+            f"max_gen={effective_max_gen} mutators={mutators}"
+        )
+
     result = graph.invoke(
         {
             "run_id": run_id,
@@ -136,10 +155,18 @@ def pipeline(
             "max_generations": effective_max_gen,
         }
     )
-    console.print(
-        f"[green]done[/] run={run_id} backtests={len(result.get('backtest_ids', []))} "
-        f"failures={len(result.get('failures', []))}"
-    )
+
+    n_backtests = len(result.get("backtest_ids", []))
+    n_failures = len(result.get("failures", []))
+
+    if bus is not None:
+        bus.emit(EvtPipelineDone(run_id=run_id, n_backtests=n_backtests, n_failures=n_failures))
+    if monitor is not None:
+        monitor.stop()
+
+    if bus is None:
+        console.print(f"[green]done[/] run={run_id} backtests={n_backtests} failures={n_failures}")
+
     _print_rankings(settings.db_path, run_id=run_id, limit=20)
 
 
@@ -247,7 +274,9 @@ def _build_mutators(
     chain = registry.chain(priority)
 
     if not chain:
-        console.print("[yellow]warn[/] no LLM providers configured — skipping mutators (set API keys in .env)")
+        console.print(
+            "[yellow]warn[/] no LLM providers configured — skipping mutators (set API keys in .env)"
+        )
         return []
 
     tracing_enabled = bool(settings.langfuse_public_key and settings.langfuse_secret_key)
@@ -270,6 +299,22 @@ def _build_mutators(
             console.print(f"[yellow]warn[/] unknown mutator {name!r} — skipping")
 
     return mutators
+
+
+def _configure_langfuse_env() -> None:
+    """Push Langfuse keys from pydantic-settings into os.environ.
+
+    pydantic-settings reads .env into the settings object but does NOT write to
+    os.environ. Langfuse's get_client() reads os.environ directly, so without
+    this the tracing client initializes disabled even when keys are set in .env.
+    """
+    import os
+
+    if settings.langfuse_public_key:
+        os.environ.setdefault("LANGFUSE_PUBLIC_KEY", settings.langfuse_public_key)
+    if settings.langfuse_secret_key:
+        os.environ.setdefault("LANGFUSE_SECRET_KEY", settings.langfuse_secret_key)
+    os.environ.setdefault("LANGFUSE_HOST", settings.langfuse_host)
 
 
 def _apply_lookback(end: date, lookback: str) -> date:

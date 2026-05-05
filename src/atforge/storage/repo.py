@@ -201,11 +201,16 @@ def insert_experiment(
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
-            run_id, generation,
-            parent_strategy_id, child_strategy_id,
-            mutator, mutation_json,
-            accepted, delta_sharpe,
-            composite_score_json, reasoning,
+            run_id,
+            generation,
+            parent_strategy_id,
+            child_strategy_id,
+            mutator,
+            mutation_json,
+            accepted,
+            delta_sharpe,
+            composite_score_json,
+            reasoning,
             _now_iso(),
         ),
     )
