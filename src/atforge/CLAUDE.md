@@ -9,7 +9,7 @@
 | Phase | Status | Notes |
 |---|---|---|
 | **Phase 1 — Foundation** | ✅ Complete | Data + patterns + backtest + storage + ranking |
-| **Phase 2a — Evolution Loop** | ✅ Complete | LLM wrapper + parallel backtest + mutators + ratchet (175 tests) |
+| **Phase 2a — Evolution Loop** | ✅ Complete | LLM wrapper + parallel backtest + mutators + ratchet (185 tests) |
 | Phase 2b — Evolution Depth | 🔄 Deferred | OpenEvolve population, Qdrant dedup, bootstrap significance |
 | Phase 3 — HITL & Execution | 🔄 Deferred | Telegram approval, paper trading, Kite broker |
 

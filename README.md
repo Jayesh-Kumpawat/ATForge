@@ -19,7 +19,7 @@
 5. *(Phase 2)* Uses LLMs to mutate strategy parameters overnight via OpenEvolve + AutoResearch ratchet
 6. *(Phase 3)* Human approves each strategy before paper/live trade executes
 
-**Phase 2a is complete:** 175 tests passing, full evolution loop runs end-to-end — LLM mutation, parallel backtests via `Send()` fan-out, AutoResearch ratchet, multi-generation cycling.
+**Phase 2a is complete:** 185 tests passing, full evolution loop runs end-to-end — LLM mutation, parallel backtests via `Send()` fan-out, AutoResearch ratchet, multi-generation cycling.
 
 ---
 
