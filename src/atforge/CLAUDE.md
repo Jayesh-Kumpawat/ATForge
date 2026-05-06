@@ -9,7 +9,8 @@
 | Phase | Status | Notes |
 |---|---|---|
 | **Phase 1 — Foundation** | ✅ Complete | Data + patterns + backtest + storage + ranking |
-| **Phase 2a — Evolution Loop** | ✅ Complete | LLM wrapper + parallel backtest + mutators + ratchet (185 tests) |
+| **Phase 2a — Evolution Loop** | ✅ Complete | LLM wrapper + parallel backtest + mutators + ratchet |
+| **A1 — Research Agent** | ✅ Complete | ReAct loop, tool calling (5 providers), ResearchAgentMutator (234 tests) |
 | Phase 2b — Evolution Depth | 🔄 Deferred | OpenEvolve population, Qdrant dedup, bootstrap significance |
 | Phase 3 — HITL & Execution | 🔄 Deferred | Telegram approval, paper trading, Kite broker |
 
@@ -138,7 +139,7 @@ ratchet_thresholds=RatchetThresholds(
 ## Useful shortcuts
 
 ```bash
-uv run pytest -q                          # all 183 tests
+uv run pytest -q                          # all 234 tests
 uv run ruff check --fix && uv run ruff format
 uvx datasette data/atforge.db             # browse DB in browser
 uv run streamlit run dashboard.py         # 5-tab dashboard

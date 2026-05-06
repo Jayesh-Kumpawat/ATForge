@@ -14,14 +14,51 @@ Key design principles:
 
 ```
 evolution/
-  types.py          — all shared dataclasses and the Mutator Protocol
-  registry.py       — DetectorConfig ↔ PatternDetector round-trip serialization
-  ratchet.py        — build_evaluation_result (DB I/O) + judge_mutation (pure)
-  prompts.py        — Pydantic response schemas + prompt template functions
+  types.py              — all shared dataclasses and the Mutator Protocol
+  registry.py           — DetectorConfig ↔ PatternDetector round-trip serialization
+  ratchet.py            — build_evaluation_result (DB I/O) + judge_mutation (pure)
+  prompts.py            — Pydantic response schemas (SmaParamsDelta, RsiParamsDelta,
+                          CompositionChoice, ResearchProposal) + prompt template functions
+  research_prompts.py   — RESEARCH_SYSTEM prompt + research_initial_message() for ReAct loop
+  agent_tools.py        — ToolDefinition dataclass + build_research_tools() (5 read-only DB tools)
+  agent_runner.py       — run_react_loop(): multi-turn ReAct loop with tool dispatch + EventBus
   mutators/
-    param_delta.py  — ParamDeltaMutator: LLM-guided SMA/RSI parameter tweaks
-    composition.py  — CompositionMutator: LLM-guided AND/OR detector combinations
+    param_delta.py      — ParamDeltaMutator: LLM-guided SMA/RSI parameter tweaks
+    composition.py      — CompositionMutator: LLM-guided AND/OR detector combinations
+    research_agent.py   — ResearchAgentMutator: ReAct loop + DB tools before proposing
 ```
+
+## A1 — Research Agent (complete)
+
+`ResearchAgentMutator` (name=`"research"`, enable via `--mutators research`) wraps `run_react_loop`:
+
+```
+_propose_one(parent_row)
+  → build initial_message with strategy ID + params + performance
+  → open sqlite3.Connection to db_path
+  → run_react_loop(llm, tools, system, msg, conn, max_iterations=6)
+       iteration 0..5:
+         LlmRequest(messages=..., tools=tool_specs) → llm_router
+         if tool_calls → dispatch → append tool results → next iter
+         if no tool_calls → return response.text (final answer)
+       if max_iterations hit → forced final turn (no tools, temp=0.3)
+  → _parse_json(raw) → ResearchProposal.model_validate(data)
+  → child_config + ProposedMutation(reasoning="[research] ... (conf=X.XX)")
+```
+
+**5 read-only DB tools available to the agent:**
+
+| Tool name | Calls | Purpose |
+|---|---|---|
+| `query_top_strategies` | `top_rankings(conn, limit, run_id)` | See best params across all runs |
+| `query_strategy_details` | `get_strategy(conn, strategy_id)` | Full config for one strategy |
+| `query_strategy_lineage` | `get_mutation_tree(conn, id, max_depth)` | Recursively trace children |
+| `query_pattern_performance` | `get_pattern_symbol_breakdown(conn, id)` | Per-symbol avg Sharpe/Sortino |
+| `query_recent_experiments` | `get_experiments_for_run(conn, run_id)` | Ratchet verdicts for a run |
+
+**Events emitted:** `EvtAgentToolCall` and `EvtAgentReasoning` per iteration into EventBus.
+
+**Supports:** `sma_crossover` and `rsi_oversold` parents only. CDL and composite parents skipped (same as `ParamDeltaMutator`).
 
 ---
 

@@ -93,7 +93,8 @@ START → load_universe → fetch_data → detect_patterns
 
 ## Phase status
 - **Phase 1** ✅ complete — data + patterns + backtest + storage + ranking
-- **Phase 2a** ✅ complete — LLM wrapper + parallel backtest + mutators + ratchet + evolution loop
+- **Phase 2a** ✅ complete — LLM wrapper + parallel backtest + mutators + ratchet + evolution loop (234 tests)
+- **A1** ✅ complete — ReAct research agent, tool calling (all 5 providers), ResearchAgentMutator
 - **Phase 2b** deferred — OpenEvolve population dynamics, Qdrant similarity dedup, per-symbol ratchet, bootstrap significance
 - **Phase 3** deferred — HITL Telegram approval, paper trading, Kite broker integration
 
