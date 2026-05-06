@@ -42,6 +42,11 @@ def complete_with_fallback(
     if not chain:
         raise LlmExhausted("provider chain is empty (no registered providers match priority)")
 
+    if request.tools is not None:
+        chain = [p for p in chain if getattr(p, "supports_tools", False)]
+        if not chain:
+            raise LlmExhausted("no tool-capable providers in chain")
+
     last_error: LlmError | None = None
 
     for provider in chain:

@@ -56,6 +56,16 @@ def build_default_registry(settings: Any) -> ProviderRegistry:
 
         reg.register(OpenRouterProvider(api_key=settings.openrouter_api_key))
 
+    if getattr(settings, "cerebras_api_key", None):
+        from atforge.llm.providers.cerebras import CerebrasProvider
+
+        reg.register(CerebrasProvider(api_key=settings.cerebras_api_key))
+
+    if getattr(settings, "nvidia_api_key", None):
+        from atforge.llm.providers.nvidia import NvidiaProvider
+
+        reg.register(NvidiaProvider(api_key=settings.nvidia_api_key))
+
     if getattr(settings, "enable_ollama", False):
         from atforge.llm.providers.ollama import OllamaProvider
 

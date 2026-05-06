@@ -24,11 +24,13 @@ class Settings(BaseSettings):
     google_api_key: str | None = None
     groq_api_key: str | None = None
     openrouter_api_key: str | None = None
+    cerebras_api_key: str | None = None
+    nvidia_api_key: str | None = None
     ollama_base_url: str = "http://localhost:11434"
     enable_ollama: bool = False
     llm_default_model: str = "gemini-2.5-flash"
     llm_provider_priority: list[str] = Field(
-        default_factory=lambda: ["gemini", "groq", "openrouter"]
+        default_factory=lambda: ["gemini", "groq", "openrouter", "cerebras", "nvidia"]
     )
 
     qdrant_url: str | None = None

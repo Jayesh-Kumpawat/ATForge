@@ -12,6 +12,8 @@ class _FakeSettings:
     google_api_key: str | None = None
     groq_api_key: str | None = None
     openrouter_api_key: str | None = None
+    cerebras_api_key: str | None = None
+    nvidia_api_key: str | None = None
     enable_ollama: bool = False
     ollama_base_url: str = "http://localhost:11434"
     llm_default_model: str = "gemini-2.5-flash"
@@ -50,3 +52,25 @@ def test_ollama_registered_when_enabled() -> None:
 def test_empty_string_key_treated_as_missing() -> None:
     reg = build_default_registry(_FakeSettings(google_api_key=""))
     assert "gemini" not in reg.names()
+
+
+def test_all_five_providers_registered() -> None:
+    s = _FakeSettings(
+        google_api_key="g",
+        groq_api_key="q",
+        openrouter_api_key="r",
+        cerebras_api_key="c",
+        nvidia_api_key="n",
+    )
+    reg = build_default_registry(s)
+    assert sorted(reg.names()) == ["cerebras", "gemini", "groq", "nvidia", "openrouter"]
+
+
+def test_cerebras_registered_when_key_set() -> None:
+    reg = build_default_registry(_FakeSettings(cerebras_api_key="csk-xxx"))
+    assert "cerebras" in reg.names()
+
+
+def test_nvidia_registered_when_key_set() -> None:
+    reg = build_default_registry(_FakeSettings(nvidia_api_key="nvapi-xxx"))
+    assert "nvidia" in reg.names()

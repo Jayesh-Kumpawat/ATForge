@@ -6,7 +6,6 @@ Run with: uv run streamlit run dashboard.py
 from __future__ import annotations
 
 import sys
-from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -15,10 +14,10 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from atforge.config import settings
-from atforge.storage.db import connect, init_db
 import json
 
+from atforge.config import settings
+from atforge.storage.db import connect
 from atforge.storage.repo import (
     get_best_sharpe_per_generation,
     get_experiments_for_run,
@@ -70,10 +69,8 @@ def available_ohlcv() -> dict[str, Path]:
         parts = p.parts
         try:
             symbol = parts[-3]  # symbol is 3 levels up from file
-            if symbol.isupper() and len(symbol) <= 20:
-                # keep latest file per symbol
-                if symbol not in result or p.stat().st_mtime > result[symbol].stat().st_mtime:
-                    result[symbol] = p
+            if symbol.isupper() and len(symbol) <= 20 and (symbol not in result or p.stat().st_mtime > result[symbol].stat().st_mtime):
+                result[symbol] = p
         except (IndexError, OSError):
             continue
     return result
@@ -437,7 +434,7 @@ with tabs[3]:
     with connect(settings.db_path) as conn:
         tables = ["runs", "strategies", "pattern_signals", "backtest_runs", "experiments"]
         for t in tables:
-            n = conn.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]  # noqa: S608
+            n = conn.execute(f"SELECT COUNT(*) c FROM {t}").fetchone()["c"]
             st.metric(t, f"{n:,}")
 
         st.divider()

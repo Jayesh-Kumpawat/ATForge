@@ -53,6 +53,7 @@ def test_error_hierarchy() -> None:
 class _FakeProvider:
     name = "fake"
     default_model = "fake-1"
+    supports_tools = False
 
     def complete(self, request: LlmRequest) -> LlmResponse:
         return LlmResponse(

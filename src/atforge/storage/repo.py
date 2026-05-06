@@ -290,3 +290,70 @@ def get_best_sharpe_per_generation(
         (run_id,),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_strategy_children(
+    conn: sqlite3.Connection,
+    parent_strategy_id: int,
+    *,
+    accepted_only: bool = True,
+) -> list[dict[str, Any]]:
+    """All experiments where this strategy was the parent."""
+    where = "WHERE e.parent_strategy_id = ?"
+    params: list[Any] = [parent_strategy_id]
+    if accepted_only:
+        where += " AND e.accepted = 1"
+    query = f"""
+        SELECT s.strategy_id, s.name, s.family, s.params_json,
+               e.experiment_id, e.delta_sharpe, e.composite_score,
+               e.mutator, e.accepted, e.created_at
+        FROM experiments e
+        JOIN strategies s ON e.child_strategy_id = s.strategy_id
+        {where}
+        ORDER BY e.created_at DESC
+    """
+    return [dict(r) for r in conn.execute(query, params).fetchall()]
+
+
+def get_pattern_symbol_breakdown(
+    conn: sqlite3.Connection,
+    strategy_id: int,
+) -> list[dict[str, Any]]:
+    """Per-symbol AVG sharpe/sortino/n_trades for a strategy across all backtests."""
+    query = """
+        SELECT b.symbol,
+               AVG(b.sharpe)   AS avg_sharpe,
+               AVG(b.sortino)  AS avg_sortino,
+               AVG(b.n_trades) AS avg_n_trades,
+               COUNT(*)        AS n_backtests,
+               MAX(b.sharpe)   AS best_sharpe
+        FROM backtest_runs b
+        WHERE b.strategy_id = ? AND b.success = 1
+        GROUP BY b.symbol
+        ORDER BY avg_sharpe DESC
+    """
+    return [dict(r) for r in conn.execute(query, (strategy_id,)).fetchall()]
+
+
+def get_mutation_tree(
+    conn: sqlite3.Connection,
+    root_strategy_id: int,
+    max_depth: int = 5,
+) -> list[dict[str, Any]]:
+    """Recursive CTE walking parent→child mutation chains from a root strategy."""
+    query = """
+        WITH RECURSIVE tree AS (
+            SELECT e.experiment_id, e.parent_strategy_id, e.child_strategy_id,
+                   e.accepted, e.delta_sharpe, e.mutator, 0 AS depth
+            FROM experiments e
+            WHERE e.parent_strategy_id = ?
+            UNION ALL
+            SELECT e.experiment_id, e.parent_strategy_id, e.child_strategy_id,
+                   e.accepted, e.delta_sharpe, e.mutator, t.depth + 1
+            FROM experiments e
+            JOIN tree t ON e.parent_strategy_id = t.child_strategy_id
+            WHERE t.depth + 1 < ?
+        )
+        SELECT * FROM tree ORDER BY depth, experiment_id
+    """
+    return [dict(r) for r in conn.execute(query, (root_strategy_id, max_depth)).fetchall()]

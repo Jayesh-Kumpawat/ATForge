@@ -28,6 +28,7 @@ _DEFAULT_MODEL = "qwen2.5-coder:14b"
 
 class OllamaProvider:
     name = "ollama"
+    supports_tools = False
 
     def __init__(
         self,

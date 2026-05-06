@@ -295,6 +295,9 @@ def _build_mutators(
             mutators.append(ParamDeltaMutator(llm_router))
         elif name == "composition":
             mutators.append(CompositionMutator(llm_router))
+        elif name == "research":
+            from atforge.evolution.mutators.research_agent import ResearchAgentMutator
+            mutators.append(ResearchAgentMutator(llm_router, db_path=settings.db_path))
         else:
             console.print(f"[yellow]warn[/] unknown mutator {name!r} — skipping")
 

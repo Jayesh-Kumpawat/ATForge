@@ -34,6 +34,24 @@ class CompositionChoice(BaseModel):
     reasoning: str = Field(max_length=256)
 
 
+class ResearchProposal(BaseModel):
+    """Final structured output from the ResearchAgentMutator ReAct loop."""
+
+    proposal_type: Literal["sma_param_delta", "rsi_param_delta"]
+    sma: SmaParamsDelta | None = None
+    rsi: RsiParamsDelta | None = None
+    research_summary: str = Field(max_length=512)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> "ResearchProposal":
+        if self.proposal_type == "sma_param_delta" and self.sma is None:
+            raise ValueError("sma must be set when proposal_type is sma_param_delta")
+        if self.proposal_type == "rsi_param_delta" and self.rsi is None:
+            raise ValueError("rsi must be set when proposal_type is rsi_param_delta")
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Prompt templates
 # ---------------------------------------------------------------------------

@@ -434,17 +434,25 @@ This is the first line of defense. Layer 1 (`_strip_fences`) and Layer 2 (`_brac
 ```
 Request → llm/router.py:complete_with_fallback()
             │
+            │  [if request.tools is set: filter to supports_tools=True providers only]
+            │
             ├─ Try gemini (1500 RPD free, primary)
             │    └─ On error (rate limit, API down) →
             ├─ Try groq (burst, fast inference)
             │    └─ On error →
             ├─ Try openrouter (diversity, 20+ models)
             │    └─ On error →
+            ├─ Try cerebras (fast inference, Llama 3.3 70B)
+            │    └─ On error →
+            ├─ Try nvidia (NIM free tier, OpenAI-compat)
+            │    └─ On error →
             └─ Try ollama (local, unlimited, opt-in via --enable-ollama)
                  └─ On error → raise (all providers exhausted)
 ```
 
-Priority order is configured via `--llm-priority` CLI flag or `settings.llm_provider_priority`. All providers are traced through Langfuse — you can see which provider served each request and its latency.
+Priority order is configured via `--llm-priority` CLI flag or `settings.llm_provider_priority`. Default: `["gemini", "groq", "openrouter", "cerebras", "nvidia"]`. All providers are traced through Langfuse — you can see which provider served each request and its latency.
+
+**Tool-calling filter:** When `LlmRequest.tools` is set (multi-turn agent calls), the router filters the chain to providers with `supports_tools=True` before attempting any. All five providers above implement `OpenAICompatProvider` (Groq, OpenRouter, Cerebras, NVIDIA) or native function-calling (Gemini) and expose `supports_tools=True`. A `LlmExhausted` is raised immediately if no tool-capable providers remain in the chain.
 
 **Why not always use the cheapest provider?**
 

@@ -632,6 +632,8 @@ CompositionMutator processes pair (CDL_HAMMER, SMA_CROSS(5,20)):
   → strategy_id=18
 ```
 
+**ResearchAgentMutator** (name=`"research"`, enabled via `--mutators research`) runs a ReAct loop (up to 6 turns) before proposing. Each loop iteration can call one of 5 read-only DB tools (`query_top_strategies`, `query_strategy_details`, `query_strategy_lineage`, `query_pattern_performance`, `query_recent_experiments`) to inspect past results before choosing parameters. Final output is a `ResearchProposal` JSON validated by Pydantic — same child config structure as `ParamDeltaMutator`. Events `EvtAgentToolCall` and `EvtAgentReasoning` are emitted to the `EventBus` each iteration.
+
 ---
 
 ### Generation 1 — mutations backtested

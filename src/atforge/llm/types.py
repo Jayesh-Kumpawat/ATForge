@@ -7,12 +7,34 @@ The Phase 1 `client.py` re-exports the dataclasses for back-compat.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSpec:
+    name: str
+    description: str
+    parameters_schema: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class Message:
+    role: Literal["user", "assistant", "tool"]
+    content: str | None = None
+    tool_calls: tuple[ToolCall, ...] | None = None
+    tool_call_id: str | None = None  # set when role=="tool"
 
 
 @dataclass(frozen=True, slots=True)
 class LlmRequest:
-    prompt: str
+    prompt: str = ""
     model: str | None = None
     system: str | None = None
     temperature: float = 0.7
@@ -20,6 +42,8 @@ class LlmRequest:
     trace_name: str | None = None
     metadata: dict[str, Any] | None = None
     response_schema: type | None = None
+    tools: tuple[ToolSpec, ...] | None = None        # multi-turn tool calling
+    messages: tuple[Message, ...] | None = None      # multi-turn conversation history
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +55,8 @@ class LlmResponse:
     output_tokens: int
     latency_ms: int
     trace_id: str | None = None
+    tool_calls: tuple[ToolCall, ...] | None = None   # present when stop_reason=="tool_use"
+    stop_reason: str | None = None                   # "end_turn" | "tool_use" | "max_tokens"
 
 
 @runtime_checkable
@@ -39,6 +65,7 @@ class LlmProvider(Protocol):
 
     name: str
     default_model: str
+    supports_tools: bool  # True only for providers wired with function-calling support
 
     def complete(self, request: LlmRequest) -> LlmResponse: ...
 
