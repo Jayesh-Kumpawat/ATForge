@@ -50,7 +50,9 @@ def test_judge_accepts_clear_improvement():
 
 def test_judge_rejects_insufficient_sharpe_improvement():
     parent = _result(mean_sharpe=1.0, mean_sortino=1.0, total_n_trades=10)
-    child = _result(mean_sharpe=1.02, mean_sortino=1.1, total_n_trades=15)  # delta_sharpe=0.02 < 0.05
+    child = _result(
+        mean_sharpe=1.02, mean_sortino=1.1, total_n_trades=15
+    )  # delta_sharpe=0.02 < 0.05
     verdict = judge_mutation(parent, child, RatchetThresholds())
     assert verdict.accepted is False
     assert "sharpe" in verdict.reasoning
@@ -98,13 +100,20 @@ def db_with_backtests(tmp_path: Path):
     with connect(db_path) as conn, txn(conn):
         insert_run(conn, run_id)
         sid = upsert_strategy(
-            conn, name="SMA_5x20", family="indicator",
+            conn,
+            name="SMA_5x20",
+            family="indicator",
             params={"type": "sma_crossover", "fast": 5, "slow": 20},
         )
         for symbol, sharpe, sortino in [("RELIANCE", 1.2, 1.5), ("TCS", 0.9, 1.1)]:
             sig_id = insert_pattern_signal(
-                conn, run_id=run_id, strategy_id=sid, symbol=symbol,
-                n_signals=5, first_date=None, last_date=None,
+                conn,
+                run_id=run_id,
+                strategy_id=sid,
+                symbol=symbol,
+                n_signals=5,
+                first_date=None,
+                last_date=None,
             )
             bt = BacktestResult(
                 symbol=symbol,
@@ -123,8 +132,14 @@ def db_with_backtests(tmp_path: Path):
                 },
             )
             insert_backtest_result(
-                conn, run_id=run_id, signal_id=sig_id, strategy_id=sid,
-                result=bt, hold_bars=5, fees=0.0003, slippage=0.0005,
+                conn,
+                run_id=run_id,
+                signal_id=sig_id,
+                strategy_id=sid,
+                result=bt,
+                hold_bars=5,
+                fees=0.0003,
+                slippage=0.0005,
                 init_cash=Decimal("100000"),
             )
     return db_path, run_id, sid
@@ -162,6 +177,7 @@ def test_build_evaluation_result_none_when_no_rows(db_with_backtests):
 
 # ── per-symbol regression tests ───────────────────────────────────────────────
 
+
 def _result_with_symbols(
     mean_sharpe: float = 1.0,
     mean_sortino: float = 1.5,
@@ -185,7 +201,9 @@ def _result_with_symbols(
 def test_judge_accepts_when_no_symbol_data():
     """Backward compat: empty per_symbol_sharpe skips the regression check."""
     parent = _result_with_symbols(mean_sharpe=1.0, per_symbol_sharpe={})
-    child = _result_with_symbols(mean_sharpe=1.1, mean_sortino=1.6, total_n_trades=20, per_symbol_sharpe={})
+    child = _result_with_symbols(
+        mean_sharpe=1.1, mean_sortino=1.6, total_n_trades=20, per_symbol_sharpe={}
+    )
     verdict = judge_mutation(parent, child, RatchetThresholds())
     assert verdict.accepted is True
 
@@ -195,7 +213,9 @@ def test_judge_accepts_when_all_symbols_improve():
         per_symbol_sharpe={"RELIANCE": 1.2, "TCS": 0.9},
     )
     child = _result_with_symbols(
-        mean_sharpe=1.15, mean_sortino=1.6, total_n_trades=20,
+        mean_sharpe=1.15,
+        mean_sortino=1.6,
+        total_n_trades=20,
         per_symbol_sharpe={"RELIANCE": 1.4, "TCS": 0.9},
     )
     verdict = judge_mutation(parent, child, RatchetThresholds())
@@ -229,7 +249,9 @@ def test_judge_accepts_when_regression_within_threshold():
         per_symbol_sharpe={"RELIANCE": 1.5, "TCS": 0.8},
     )
     child = _result_with_symbols(
-        mean_sharpe=1.1, mean_sortino=1.6, total_n_trades=20,
+        mean_sharpe=1.1,
+        mean_sortino=1.6,
+        total_n_trades=20,
         per_symbol_sharpe={"RELIANCE": 1.9, "TCS": 0.5},  # TCS drop = -0.3
     )
     verdict = judge_mutation(parent, child, RatchetThresholds(max_symbol_regression=0.5))
@@ -240,7 +262,9 @@ def test_judge_symbol_regression_disabled_with_inf():
     """max_symbol_regression=inf disables per-symbol check entirely."""
     parent = _result_with_symbols(per_symbol_sharpe={"RELIANCE": 1.0, "TCS": 1.0})
     child = _result_with_symbols(
-        mean_sharpe=1.1, mean_sortino=1.6, total_n_trades=20,
+        mean_sharpe=1.1,
+        mean_sortino=1.6,
+        total_n_trades=20,
         per_symbol_sharpe={"RELIANCE": 2.0, "TCS": -5.0},  # catastrophic TCS drop
     )
     verdict = judge_mutation(parent, child, RatchetThresholds(max_symbol_regression=float("inf")))
@@ -250,7 +274,9 @@ def test_judge_symbol_regression_disabled_with_inf():
 def test_composite_score_has_symbol_fields():
     parent = _result_with_symbols(per_symbol_sharpe={"RELIANCE": 1.0})
     child = _result_with_symbols(
-        mean_sharpe=1.1, mean_sortino=1.6, total_n_trades=20,
+        mean_sharpe=1.1,
+        mean_sortino=1.6,
+        total_n_trades=20,
         per_symbol_sharpe={"RELIANCE": 1.1},
     )
     verdict = judge_mutation(parent, child, RatchetThresholds())

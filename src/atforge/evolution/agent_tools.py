@@ -10,8 +10,9 @@ No other changes needed.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from atforge.llm.types import ToolSpec
 from atforge.storage.repo import (
@@ -77,9 +78,7 @@ def build_research_tools() -> list[ToolDefinition]:
                     "required": ["strategy_id"],
                 },
             ),
-            handler=lambda args, conn: {
-                "strategy": get_strategy(conn, int(args["strategy_id"]))
-            },
+            handler=lambda args, conn: {"strategy": get_strategy(conn, int(args["strategy_id"]))},
         ),
         ToolDefinition(
             spec=ToolSpec(

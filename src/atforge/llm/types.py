@@ -42,8 +42,8 @@ class LlmRequest:
     trace_name: str | None = None
     metadata: dict[str, Any] | None = None
     response_schema: type | None = None
-    tools: tuple[ToolSpec, ...] | None = None        # multi-turn tool calling
-    messages: tuple[Message, ...] | None = None      # multi-turn conversation history
+    tools: tuple[ToolSpec, ...] | None = None  # multi-turn tool calling
+    messages: tuple[Message, ...] | None = None  # multi-turn conversation history
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +55,8 @@ class LlmResponse:
     output_tokens: int
     latency_ms: int
     trace_id: str | None = None
-    tool_calls: tuple[ToolCall, ...] | None = None   # present when stop_reason=="tool_use"
-    stop_reason: str | None = None                   # "end_turn" | "tool_use" | "max_tokens"
+    tool_calls: tuple[ToolCall, ...] | None = None  # present when stop_reason=="tool_use"
+    stop_reason: str | None = None  # "end_turn" | "tool_use" | "max_tokens"
 
 
 @runtime_checkable

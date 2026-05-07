@@ -109,7 +109,9 @@ def test_talib_cdl_row_is_skipped():
         "strategy_id": 3,
         "name": "CDLENGULFING_bullish",
         "family": "candlestick",
-        "params_json": json.dumps({"type": "talib_cdl", "cdl_name": "CDLENGULFING", "direction": "bullish"}),
+        "params_json": json.dumps(
+            {"type": "talib_cdl", "cdl_name": "CDLENGULFING", "direction": "bullish"}
+        ),
         "mean_sharpe": 1.2,
         "mean_sortino": 1.5,
         "total_n_trades": 20,

@@ -102,6 +102,7 @@ def test_detector_params_json_is_stable():
     det = SmaCrossover(fast=5, slow=20)
     assert detector_params_json(det) == detector_params_json(det)
     import json
+
     cfg = json.loads(detector_params_json(det))
     assert cfg == {"fast": 5, "slow": 20, "type": "sma_crossover"}
 
@@ -110,6 +111,7 @@ def test_unknown_detector_type_raises():
     class Alien:
         name = "alien"
         family = "indicator"
+
         def detect(self, _): ...
 
     with pytest.raises(TypeError, match="unknown detector type"):

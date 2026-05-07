@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -17,14 +18,16 @@ if TYPE_CHECKING:
 class AgentRoleConfig:
     """Per-role configuration for A2 multi-agent nodes.
 
-    Phase 6: used by explorer/exploiter/critic to configure LLM behaviour.
-    Phase 8 will wire llm_priority and model overrides from CLI/YAML.
+    All fields configurable via atforge.yaml. Defaults chosen for free-tier
+    Gemini stack: explorer high-temp, exploiter low-temp, critic very low-temp.
     """
 
     role: str  # "explorer" | "exploiter" | "critic"
-    temperature: float  # exploration level — 0.9 explorer, 0.4 exploiter
+    temperature: float  # exploration level — 0.9 explorer, 0.4 exploiter, 0.3 critic
     max_iterations: int  # ReAct loop bound
-    system_prompt: str  # role-specific system prompt injected at call time
+    system_prompt: str  # role-specific system prompt
+    llm_priority: tuple[str, ...] = field(default_factory=tuple)  # empty = use global
+    model: str | None = None  # model override; None = use router default
 
 
 @dataclass(frozen=True)
@@ -48,9 +51,13 @@ class PipelineDeps:
     tracing_enabled: bool = False
     event_bus: Any | None = None  # EventBus | None (Any avoids frozen-dataclass issues)
 
-    # A2 multi-agent role configs — empty dict = use Phase 6 defaults in each node.
-    # Phase 8 will populate from CLI flags / atforge.yaml.
+    # A2 multi-agent role configs — empty dict = use defaults in each node.
+    # Phase 8 populates from atforge.yaml.
     role_configs: dict[str, AgentRoleConfig] = field(default_factory=dict)
+
+    # LLM router — injected by CLI, used by critic_node and exploiter_node directly.
+    # None = no direct LLM access (nodes fall back to stub behaviour).
+    llm_router: Callable | None = field(default=None, compare=False, hash=False)
 
     def ensure_dirs(self) -> None:
         self.ohlcv_cache_dir.mkdir(parents=True, exist_ok=True)

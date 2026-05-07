@@ -59,7 +59,12 @@ def _mock_llm(fast: int = 8, slow: int = 22):
 
     def _router(req: LlmRequest) -> LlmResponse:
         return LlmResponse(
-            text=payload, model="mock", provider="mock", input_tokens=5, output_tokens=15, latency_ms=1
+            text=payload,
+            model="mock",
+            provider="mock",
+            input_tokens=5,
+            output_tokens=15,
+            latency_ms=1,
         )
 
     return _router
@@ -111,9 +116,9 @@ def test_phase2a_two_generation_pipeline(phase2_deps: PipelineDeps) -> None:
             "SELECT accepted, delta_sharpe, composite_score FROM experiments WHERE run_id=?",
             (run_id,),
         ).fetchall()
-        run_status = conn.execute(
-            "SELECT status FROM runs WHERE run_id=?", (run_id,)
-        ).fetchone()["status"]
+        run_status = conn.execute("SELECT status FROM runs WHERE run_id=?", (run_id,)).fetchone()[
+            "status"
+        ]
 
     # Generation 0: 2 symbols * 2 detectors = 4 backtests (SMA fires + CDL varies)
     assert gen0_count >= 2, f"expected gen=0 backtests, got {gen0_count}"

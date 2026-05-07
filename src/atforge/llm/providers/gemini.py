@@ -102,16 +102,18 @@ class GeminiProvider:
             body["systemInstruction"] = {"parts": [{"text": request.system}]}
 
         if request.tools:
-            body["tools"] = [{
-                "functionDeclarations": [
-                    {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters_schema,
-                    }
-                    for t in request.tools
-                ]
-            }]
+            body["tools"] = [
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": t.name,
+                            "description": t.description,
+                            "parameters": t.parameters_schema,
+                        }
+                        for t in request.tools
+                    ]
+                }
+            ]
             body["toolConfig"] = {"functionCallingConfig": {"mode": "AUTO"}}
 
         return body
@@ -139,15 +141,19 @@ class GeminiProvider:
                     response_data = json.loads(msg.content or "{}")
                 except (json.JSONDecodeError, TypeError):
                     response_data = {"result": msg.content or ""}
-                contents.append({
-                    "role": "user",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": msg.tool_call_id or "unknown",
-                            "response": response_data,
-                        }
-                    }],
-                })
+                contents.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "functionResponse": {
+                                    "name": msg.tool_call_id or "unknown",
+                                    "response": response_data,
+                                }
+                            }
+                        ],
+                    }
+                )
         return contents
 
     @staticmethod
@@ -171,11 +177,15 @@ class GeminiProvider:
                 text_parts.append(part["text"])
             elif "functionCall" in part:
                 fc = part["functionCall"]
-                fn_calls.append(ToolCall(
-                    id=fc["name"],  # Gemini has no separate call ID; function name is unique per turn
-                    name=fc["name"],
-                    arguments=fc.get("args", {}),
-                ))
+                fn_calls.append(
+                    ToolCall(
+                        id=fc[
+                            "name"
+                        ],  # Gemini has no separate call ID; function name is unique per turn
+                        name=fc["name"],
+                        arguments=fc.get("args", {}),
+                    )
+                )
 
         tool_calls = tuple(fn_calls) if fn_calls else None
 

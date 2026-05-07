@@ -14,7 +14,9 @@ from atforge.llm.types import (
 
 
 def _resp(text: str = "ok") -> LlmResponse:
-    return LlmResponse(text=text, model="m", provider="p", input_tokens=1, output_tokens=1, latency_ms=0)
+    return LlmResponse(
+        text=text, model="m", provider="p", input_tokens=1, output_tokens=1, latency_ms=0
+    )
 
 
 def _tool_resp() -> LlmResponse:

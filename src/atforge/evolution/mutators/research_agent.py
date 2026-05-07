@@ -42,6 +42,7 @@ class ResearchAgentMutator:
         model: str | None = None,
         max_iterations: int = 6,
         temperature: float = 0.7,
+        system_prompt_override: str | None = None,
     ) -> None:
         self._llm = llm_router
         self._db_path = db_path
@@ -49,6 +50,7 @@ class ResearchAgentMutator:
         self._model = model
         self._max_iterations = max_iterations
         self._temperature = temperature
+        self._system_prompt = system_prompt_override or RESEARCH_SYSTEM
 
     def propose(
         self,
@@ -94,7 +96,7 @@ class ResearchAgentMutator:
             raw = run_react_loop(
                 self._llm,
                 tools,
-                RESEARCH_SYSTEM,
+                self._system_prompt,
                 initial_msg,
                 conn,
                 max_iterations=self._max_iterations,

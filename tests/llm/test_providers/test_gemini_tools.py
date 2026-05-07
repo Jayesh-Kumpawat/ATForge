@@ -17,23 +17,27 @@ def _client(handler) -> httpx.Client:
 
 def _tool_call_body(fn_name: str = "query_top_strategies", args: dict | None = None) -> dict:
     return {
-        "candidates": [{
-            "content": {
-                "role": "model",
-                "parts": [{"functionCall": {"name": fn_name, "args": args or {"limit": 5}}}],
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"functionCall": {"name": fn_name, "args": args or {"limit": 5}}}],
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
     }
 
 
 def _text_body(text: str = "final answer") -> dict:
     return {
-        "candidates": [{
-            "content": {"role": "model", "parts": [{"text": text}]},
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": text}]},
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8},
     }
 
@@ -91,7 +95,11 @@ def test_messages_mapped_to_contents() -> None:
         Message(role="user", content="what to mutate?"),
         Message(
             role="assistant",
-            tool_calls=(ToolCall(id="query_top_strategies", name="query_top_strategies", arguments={"limit": 5}),),
+            tool_calls=(
+                ToolCall(
+                    id="query_top_strategies", name="query_top_strategies", arguments={"limit": 5}
+                ),
+            ),
         ),
         Message(role="tool", content='{"strategies": []}', tool_call_id="query_top_strategies"),
         Message(role="assistant", content="Based on results, try RSI 12."),
@@ -116,7 +124,11 @@ def test_messages_mapped_to_contents() -> None:
 def test_tool_call_extracted_from_response() -> None:
     p = GeminiProvider(
         api_key="K",
-        client=_client(lambda r: httpx.Response(200, json=_tool_call_body("query_top_strategies", {"limit": 5}))),
+        client=_client(
+            lambda r: httpx.Response(
+                200, json=_tool_call_body("query_top_strategies", {"limit": 5})
+            )
+        ),
     )
     resp = p.complete(LlmRequest(prompt="go"))
     assert resp.tool_calls is not None
@@ -149,16 +161,18 @@ def test_stop_reason_end_turn_for_text_response() -> None:
 
 def test_text_and_tool_call_in_same_response() -> None:
     body = {
-        "candidates": [{
-            "content": {
-                "role": "model",
-                "parts": [
-                    {"text": "Let me check strategies."},
-                    {"functionCall": {"name": "query_top_strategies", "args": {}}},
-                ],
-            },
-            "finishReason": "STOP",
-        }],
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"text": "Let me check strategies."},
+                        {"functionCall": {"name": "query_top_strategies", "args": {}}},
+                    ],
+                },
+                "finishReason": "STOP",
+            }
+        ],
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 10},
     }
     p = GeminiProvider(api_key="K", client=_client(lambda r: httpx.Response(200, json=body)))

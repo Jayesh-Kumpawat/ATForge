@@ -21,6 +21,7 @@ from atforge.evolution.types import RatchetThresholds
 from atforge.graph.deps import PipelineDeps
 from atforge.graph.events import EventBus, EvtPipelineDone, EvtPipelineStart
 from atforge.graph.pipeline import build_pipeline
+from atforge.graph.role_config import load_role_configs
 from atforge.llm.registry import build_default_registry
 from atforge.llm.router import complete_with_fallback
 from atforge.llm.types import LlmRequest
@@ -101,15 +102,18 @@ def pipeline(
     _configure_langfuse_env()
     init_db(settings.db_path)
 
-    mutator_list = _build_mutators(
+    priority = [p.strip() for p in llm_priority.split(",") if p.strip()]
+    mutator_list, llm_router = _build_mutators(
         mutator_names=[m.strip() for m in mutators.split(",") if m.strip()],
-        llm_priority=[p.strip() for p in llm_priority.split(",") if p.strip()],
+        llm_priority=priority,
         enable_ollama=enable_ollama,
     )
 
     effective_max_gen = 1 if dry_run else max_generations
     tracing_enabled = bool(settings.langfuse_public_key and settings.langfuse_secret_key)
     bus = EventBus() if live else None
+
+    role_configs = load_role_configs()  # auto-discovers atforge.yaml in cwd
 
     deps = PipelineDeps(
         data_provider=_build_default_provider(),
@@ -129,6 +133,8 @@ def pipeline(
         ),
         tracing_enabled=tracing_enabled,
         event_bus=bus,
+        llm_router=llm_router,
+        role_configs=role_configs,
     )
     graph = build_pipeline(deps)
     run_id = uuid4().hex[:12]
@@ -266,8 +272,9 @@ def _build_mutators(
     mutator_names: list[str],
     llm_priority: list[str],
     enable_ollama: bool,
-) -> list:
-    """Build mutator instances. Returns empty list if no LLM providers configured."""
+) -> tuple[list, object]:
+    """Build mutator instances. Returns (mutators, llm_router | None)."""
+
     eff_settings = settings.model_copy(update={"enable_ollama": enable_ollama})
     registry = build_default_registry(eff_settings)
     priority = llm_priority + (["ollama"] if enable_ollama else [])
@@ -277,7 +284,7 @@ def _build_mutators(
         console.print(
             "[yellow]warn[/] no LLM providers configured — skipping mutators (set API keys in .env)"
         )
-        return []
+        return [], None
 
     tracing_enabled = bool(settings.langfuse_public_key and settings.langfuse_secret_key)
 
@@ -297,11 +304,12 @@ def _build_mutators(
             mutators.append(CompositionMutator(llm_router))
         elif name == "research":
             from atforge.evolution.mutators.research_agent import ResearchAgentMutator
+
             mutators.append(ResearchAgentMutator(llm_router, db_path=settings.db_path))
         else:
             console.print(f"[yellow]warn[/] unknown mutator {name!r} — skipping")
 
-    return mutators
+    return mutators, llm_router
 
 
 def _configure_langfuse_env() -> None:

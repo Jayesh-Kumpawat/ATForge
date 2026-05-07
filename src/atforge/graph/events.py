@@ -70,10 +70,10 @@ class EvtPipelineDone:
 
 @dataclass(frozen=True)
 class EvtAgentToolCall:
-    role: str                   # "research" | "explorer" | "exploiter" | "critic"
+    role: str  # "research" | "explorer" | "exploiter" | "critic"
     tool_name: str
     iteration: int
-    args_summary: str           # JSON, max 200 chars
+    args_summary: str  # JSON, max 200 chars
     parent_strategy_id: int | None = None
 
 
@@ -81,8 +81,16 @@ class EvtAgentToolCall:
 class EvtAgentReasoning:
     role: str
     iteration: int
-    text: str                   # max 500 chars
+    text: str  # max 500 chars
     parent_strategy_id: int | None = None
+
+
+@dataclass(frozen=True)
+class EvtCriticVerdict:
+    parent_strategy_id: int
+    fingerprint: str
+    verdict: str  # "accept" | "veto"
+    reason: str
 
 
 PipelineEvent = (
@@ -96,6 +104,7 @@ PipelineEvent = (
     | EvtPipelineDone
     | EvtAgentToolCall
     | EvtAgentReasoning
+    | EvtCriticVerdict
 )
 
 _SENTINEL = None

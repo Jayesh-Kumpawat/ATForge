@@ -181,7 +181,7 @@ def insert_experiment(
     run_id: str,
     generation: int,
     parent_strategy_id: int,
-    child_strategy_id: int,
+    child_strategy_id: int | None,
     mutator: str,
     mutation_json: str,
     accepted: int,

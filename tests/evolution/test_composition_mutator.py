@@ -19,6 +19,7 @@ def _mock_llm(response_text: str):
             output_tokens=10,
             latency_ms=1,
         )
+
     return _router
 
 
@@ -37,7 +38,9 @@ def _row(strategy_id: int, name: str, cfg: dict, sharpe: float = 1.0) -> Strateg
 
 
 SMA_ROW = _row(1, "SMA_5x20_bullish", {"type": "sma_crossover", "fast": 5, "slow": 20}, sharpe=0.9)
-RSI_ROW = _row(2, "RSI_14_reclaim_30", {"type": "rsi_oversold", "period": 14, "oversold": 30}, sharpe=0.7)
+RSI_ROW = _row(
+    2, "RSI_14_reclaim_30", {"type": "rsi_oversold", "period": 14, "oversold": 30}, sharpe=0.7
+)
 
 
 def test_and_composition_happy_path():

@@ -39,6 +39,7 @@ _HOLD_BARS = 10
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+
 @st.cache_data(ttl=30)
 def load_rankings(run_id: str | None = None, limit: int = 50) -> pd.DataFrame:
     if not settings.db_path.exists():
@@ -69,7 +70,11 @@ def available_ohlcv() -> dict[str, Path]:
         parts = p.parts
         try:
             symbol = parts[-3]  # symbol is 3 levels up from file
-            if symbol.isupper() and len(symbol) <= 20 and (symbol not in result or p.stat().st_mtime > result[symbol].stat().st_mtime):
+            if (
+                symbol.isupper()
+                and len(symbol) <= 20
+                and (symbol not in result or p.stat().st_mtime > result[symbol].stat().st_mtime)
+            ):
                 result[symbol] = p
         except (IndexError, OSError):
             continue
@@ -123,16 +128,20 @@ def parse_strategy_from_path(p: Path) -> str:
 
 
 def candlestick_fig(ohlcv: pd.DataFrame, symbol: str) -> go.Figure:
-    fig = go.Figure(data=[go.Candlestick(
-        x=ohlcv.index,
-        open=ohlcv["open"],
-        high=ohlcv["high"],
-        low=ohlcv["low"],
-        close=ohlcv["close"],
-        name=symbol,
-        increasing_line_color="#26a641",
-        decreasing_line_color="#cf222e",
-    )])
+    fig = go.Figure(
+        data=[
+            go.Candlestick(
+                x=ohlcv.index,
+                open=ohlcv["open"],
+                high=ohlcv["high"],
+                low=ohlcv["low"],
+                close=ohlcv["close"],
+                name=symbol,
+                increasing_line_color="#26a641",
+                decreasing_line_color="#cf222e",
+            )
+        ]
+    )
     fig.update_layout(
         xaxis_rangeslider_visible=False,
         margin=dict(l=0, r=0, t=30, b=0),
@@ -167,13 +176,15 @@ def overlay_signal(
 
     # Triangle markers below each signal candle
     prices = ohlcv.loc[ohlcv.index.isin(hit_dates), "low"] * 0.985
-    fig.add_trace(go.Scatter(
-        x=prices.index,
-        y=prices.values,
-        mode="markers",
-        marker=dict(symbol="triangle-up", size=11, color=marker_color),
-        name=label,
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=prices.index,
+            y=prices.values,
+            mode="markers",
+            marker=dict(symbol="triangle-up", size=11, color=marker_color),
+            name=label,
+        )
+    )
 
     idx = ohlcv.index
     for d in hit_dates:
@@ -183,8 +194,11 @@ def overlay_signal(
 
         # Highlight signal candle
         fig.add_vrect(
-            x0=d, x1=d + pd.Timedelta(days=1),
-            fillcolor=fill_color, opacity=1.0, line_width=0,
+            x0=d,
+            x1=d + pd.Timedelta(days=1),
+            fillcolor=fill_color,
+            opacity=1.0,
+            line_width=0,
             layer="below",
         )
 
@@ -193,8 +207,11 @@ def overlay_signal(
             end_pos = min(pos + _HOLD_BARS, len(idx) - 1)
             end_d = idx[end_pos]
             fig.add_vrect(
-                x0=d + pd.Timedelta(days=1), x1=end_d + pd.Timedelta(days=1),
-                fillcolor=fill_color, opacity=0.5, line_width=0,
+                x0=d + pd.Timedelta(days=1),
+                x1=end_d + pd.Timedelta(days=1),
+                fillcolor=fill_color,
+                opacity=0.5,
+                line_width=0,
                 layer="below",
             )
 
@@ -202,10 +219,14 @@ def overlay_signal(
         if show_labels:
             high = ohlcv.loc[d, "high"] if d in ohlcv.index else prices.get(d, 0)
             fig.add_annotation(
-                x=d, y=high,
+                x=d,
+                y=high,
                 text=_short_label(label),
-                showarrow=True, arrowhead=2, arrowcolor=marker_color,
-                ax=0, ay=-28,
+                showarrow=True,
+                arrowhead=2,
+                arrowcolor=marker_color,
+                ax=0,
+                ay=-28,
                 font=dict(size=9, color=marker_color),
                 bgcolor="rgba(0,0,0,0.5)",
                 borderpad=2,
@@ -220,9 +241,7 @@ st.sidebar.title("📈 ATForge")
 st.sidebar.caption("Phase 2a — Evolution Loop")
 
 db_ok = settings.db_path.exists()
-st.sidebar.markdown(
-    f"DB: {'✅' if db_ok else '❌ not found'} `{settings.db_path.name}`"
-)
+st.sidebar.markdown(f"DB: {'✅' if db_ok else '❌ not found'} `{settings.db_path.name}`")
 
 if not db_ok:
     st.warning(
@@ -243,7 +262,11 @@ with tabs[0]:
     run_filter = st.selectbox(
         "Filter by run",
         ["All runs"] + (runs_df["run_id"].tolist() if not runs_df.empty else []),
-        format_func=lambda r: r if r == "All runs" else f"{r} ({runs_df.loc[runs_df['run_id']==r, 'started_at'].iloc[0][:10] if not runs_df.empty else ''})",
+        format_func=lambda r: (
+            r
+            if r == "All runs"
+            else f"{r} ({runs_df.loc[runs_df['run_id'] == r, 'started_at'].iloc[0][:10] if not runs_df.empty else ''})"
+        ),
     )
     top_n = st.slider("Show top N", 5, 100, 30)
 
@@ -254,25 +277,49 @@ with tabs[0]:
         st.info("No successful backtests found. Run the pipeline first.")
     else:
         # Format for display
-        disp = df[["symbol", "generation", "strategy_name", "family", "n_trades", "sharpe", "sortino", "cagr", "win_rate", "max_drawdown", "total_return"]].copy()
+        disp = df[
+            [
+                "symbol",
+                "generation",
+                "strategy_name",
+                "family",
+                "n_trades",
+                "sharpe",
+                "sortino",
+                "cagr",
+                "win_rate",
+                "max_drawdown",
+                "total_return",
+            ]
+        ].copy()
         disp["sharpe"] = disp["sharpe"].apply(lambda x: f"{x:.2f}" if x is not None else "-")
         disp["sortino"] = disp["sortino"].apply(lambda x: f"{x:.2f}" if x is not None else "-")
         disp["cagr"] = disp["cagr"].apply(lambda x: f"{float(x):.1%}" if x is not None else "-")
-        disp["win_rate"] = disp["win_rate"].apply(lambda x: f"{float(x):.1%}" if x is not None else "-")
-        disp = disp.rename(columns={
-            "strategy_name": "strategy", "n_trades": "trades", "generation": "gen",
-            "win_rate": "win%", "total_return": "return", "max_drawdown": "max_dd"
-        })
+        disp["win_rate"] = disp["win_rate"].apply(
+            lambda x: f"{float(x):.1%}" if x is not None else "-"
+        )
+        disp = disp.rename(
+            columns={
+                "strategy_name": "strategy",
+                "n_trades": "trades",
+                "generation": "gen",
+                "win_rate": "win%",
+                "total_return": "return",
+                "max_drawdown": "max_dd",
+            }
+        )
         st.dataframe(disp, use_container_width=True, hide_index=True)
 
         # Mini bar chart of top 10 by Sharpe
         chart_df = df.head(10).copy()
         chart_df["label"] = chart_df["symbol"] + " / " + chart_df["strategy_name"]
-        fig = go.Figure(go.Bar(
-            x=chart_df["label"],
-            y=chart_df["sharpe"].astype(float),
-            marker_color="#3fb950",
-        ))
+        fig = go.Figure(
+            go.Bar(
+                x=chart_df["label"],
+                y=chart_df["sharpe"].astype(float),
+                marker_color="#3fb950",
+            )
+        )
         fig.update_layout(
             title="Top 10 — Sharpe Ratio",
             xaxis_tickangle=-35,
@@ -324,7 +371,7 @@ with tabs[1]:
 
         if len(date_range) == 2:
             start_d, end_d = date_range
-            ohlcv = ohlcv.loc[str(start_d):str(end_d)]
+            ohlcv = ohlcv.loc[str(start_d) : str(end_d)]
 
         if ohlcv.empty:
             st.warning("No data in selected date range.")
@@ -363,11 +410,15 @@ with tabs[1]:
                         sig = sig_df["signal"].astype(bool)
                         if not isinstance(sig.index, pd.DatetimeIndex):
                             sig.index = pd.DatetimeIndex(sig.index)
-                        sig = sig.loc[str(start_d):str(end_d)] if len(date_range) == 2 else sig
+                        sig = sig.loc[str(start_d) : str(end_d)] if len(date_range) == 2 else sig
                         # suppress labels if too many signals (visual clutter)
                         n_hits = overlay_signal(
-                            fig, ohlcv, sig, label,
-                            fill_color, marker_color,
+                            fig,
+                            ohlcv,
+                            sig,
+                            label,
+                            fill_color,
+                            marker_color,
                             show_hold_window=show_hold,
                             show_labels=show_labels and (total_signals + int(sig.sum()) <= 30),
                         )
@@ -379,12 +430,14 @@ with tabs[1]:
             st.plotly_chart(fig, use_container_width=True)
 
             # Volume bar chart
-            vol_fig = go.Figure(go.Bar(
-                x=ohlcv.index,
-                y=ohlcv["volume"],
-                marker_color="#388bfd",
-                name="Volume",
-            ))
+            vol_fig = go.Figure(
+                go.Bar(
+                    x=ohlcv.index,
+                    y=ohlcv["volume"],
+                    marker_color="#388bfd",
+                    name="Volume",
+                )
+            )
             vol_fig.update_layout(
                 height=150,
                 margin=dict(l=0, r=0, t=10, b=0),
@@ -409,12 +462,14 @@ with tabs[2]:
             with connect(settings.db_path) as conn:
                 counts = conn.execute(
                     "SELECT COUNT(*) total, SUM(success) ok FROM backtest_runs WHERE run_id=?",
-                    (row["run_id"],)
+                    (row["run_id"],),
                 ).fetchone()
             total = counts["total"] or 0
             ok = counts["ok"] or 0
 
-            status_icon = {"success": "✅", "running": "⏳", "partial": "⚠️", "failed": "❌"}.get(row["status"], "❓")
+            status_icon = {"success": "✅", "running": "⏳", "partial": "⚠️", "failed": "❌"}.get(
+                row["status"], "❓"
+            )
             with st.expander(f"{status_icon} `{row['run_id']}` — {row['started_at'][:16]}"):
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Status", row["status"])
@@ -485,7 +540,9 @@ with tabs[4]:
         evo_run = st.selectbox(
             "Select run",
             runs_df_evo["run_id"].tolist(),
-            format_func=lambda r: f"{r} ({runs_df_evo.loc[runs_df_evo['run_id']==r, 'started_at'].iloc[0][:16]})",
+            format_func=lambda r: (
+                f"{r} ({runs_df_evo.loc[runs_df_evo['run_id'] == r, 'started_at'].iloc[0][:16]})"
+            ),
             key="evo_run_select",
         )
 
@@ -516,13 +573,15 @@ with tabs[4]:
 
             with c_left:
                 if not prog_df.empty:
-                    bar_fig = go.Figure(go.Bar(
-                        x=[f"Gen {g}" for g in prog_df["generation"]],
-                        y=prog_df["best_sharpe"].astype(float),
-                        marker_color="#3fb950",
-                        text=prog_df["best_sharpe"].apply(lambda v: f"{float(v):.2f}"),
-                        textposition="outside",
-                    ))
+                    bar_fig = go.Figure(
+                        go.Bar(
+                            x=[f"Gen {g}" for g in prog_df["generation"]],
+                            y=prog_df["best_sharpe"].astype(float),
+                            marker_color="#3fb950",
+                            text=prog_df["best_sharpe"].apply(lambda v: f"{float(v):.2f}"),
+                            textposition="outside",
+                        )
+                    )
                     bar_fig.update_layout(
                         title="Best Sharpe per Generation",
                         yaxis_title="Sharpe",
@@ -535,13 +594,15 @@ with tabs[4]:
                     st.plotly_chart(bar_fig, use_container_width=True)
 
             with c_right:
-                pie_fig = go.Figure(go.Pie(
-                    labels=["Accepted", "Rejected"],
-                    values=[n_accepted, n_rejected],
-                    marker_colors=["#3fb950", "#f85149"],
-                    hole=0.4,
-                    textinfo="label+percent",
-                ))
+                pie_fig = go.Figure(
+                    go.Pie(
+                        labels=["Accepted", "Rejected"],
+                        values=[n_accepted, n_rejected],
+                        marker_colors=["#3fb950", "#f85149"],
+                        hole=0.4,
+                        textinfo="label+percent",
+                    )
+                )
                 pie_fig.update_layout(
                     title="Ratchet Verdicts",
                     margin=dict(l=0, r=0, t=40, b=0),
@@ -557,14 +618,24 @@ with tabs[4]:
             gens = sorted(exp_df["generation"].unique().tolist())
             gen_options = ["All"] + [str(g) for g in gens]
             gen_filter = st.selectbox("Filter by generation", gen_options, key="evo_gen_filter")
-            filtered = exp_df if gen_filter == "All" else exp_df[exp_df["generation"] == int(gen_filter)]
+            filtered = (
+                exp_df if gen_filter == "All" else exp_df[exp_df["generation"] == int(gen_filter)]
+            )
 
             # ── mutations table ──
             st.subheader("Mutation Log")
-            tbl = filtered[[
-                "generation", "mutator", "parent_name", "child_name",
-                "delta_sharpe", "accepted", "reasoning", "composite_score",
-            ]].copy()
+            tbl = filtered[
+                [
+                    "generation",
+                    "mutator",
+                    "parent_name",
+                    "child_name",
+                    "delta_sharpe",
+                    "accepted",
+                    "reasoning",
+                    "composite_score",
+                ]
+            ].copy()
 
             tbl["accepted"] = tbl["accepted"].apply(lambda v: "✓" if v else "✗")
             tbl["delta_sharpe"] = tbl["delta_sharpe"].apply(
@@ -579,17 +650,30 @@ with tabs[4]:
                     return "-"
                 try:
                     d = json.loads(raw)
-                    parts = [f"Δsh={d.get('delta_sharpe', '?'):.2f}" if isinstance(d.get('delta_sharpe'), float) else "",
-                             f"Δso={d.get('delta_sortino', '?'):.2f}" if isinstance(d.get('delta_sortino'), float) else "",
-                             f"dd={d.get('dd_ratio', '?'):.2f}" if isinstance(d.get('dd_ratio'), float) else "",
-                             f"n={d.get('child_n_trades', '?')}"]
+                    parts = [
+                        f"Δsh={d.get('delta_sharpe', '?'):.2f}"
+                        if isinstance(d.get("delta_sharpe"), float)
+                        else "",
+                        f"Δso={d.get('delta_sortino', '?'):.2f}"
+                        if isinstance(d.get("delta_sortino"), float)
+                        else "",
+                        f"dd={d.get('dd_ratio', '?'):.2f}"
+                        if isinstance(d.get("dd_ratio"), float)
+                        else "",
+                        f"n={d.get('child_n_trades', '?')}",
+                    ]
                     return " | ".join(p for p in parts if p)
                 except Exception:
                     return raw[:60]
 
             tbl["composite_score"] = tbl["composite_score"].apply(_fmt_score)
-            tbl = tbl.rename(columns={
-                "generation": "gen", "parent_name": "parent", "child_name": "child",
-                "delta_sharpe": "Δsharpe", "composite_score": "scores",
-            })
+            tbl = tbl.rename(
+                columns={
+                    "generation": "gen",
+                    "parent_name": "parent",
+                    "child_name": "child",
+                    "delta_sharpe": "Δsharpe",
+                    "composite_score": "scores",
+                }
+            )
             st.dataframe(tbl, use_container_width=True, hide_index=True)

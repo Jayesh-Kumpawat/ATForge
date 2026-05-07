@@ -39,27 +39,31 @@ def _messages_to_openai(messages: tuple[Message, ...]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for msg in messages:
         if msg.role == "tool":
-            result.append({
-                "role": "tool",
-                "tool_call_id": msg.tool_call_id or "",
-                "content": msg.content or "",
-            })
+            result.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": msg.tool_call_id or "",
+                    "content": msg.content or "",
+                }
+            )
         elif msg.role == "assistant" and msg.tool_calls:
-            result.append({
-                "role": "assistant",
-                "content": msg.content,
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments),
-                        },
-                    }
-                    for tc in msg.tool_calls
-                ],
-            })
+            result.append(
+                {
+                    "role": "assistant",
+                    "content": msg.content,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments),
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ],
+                }
+            )
         else:
             result.append({"role": msg.role, "content": msg.content or ""})
     return result
