@@ -19,8 +19,10 @@ import json
 from atforge.config import settings
 from atforge.storage.db import connect
 from atforge.storage.repo import (
+    get_agent_activity_summary,
     get_best_sharpe_per_generation,
     get_experiments_for_run,
+    get_recent_critic_verdicts,
     top_rankings,
 )
 
@@ -101,6 +103,28 @@ def load_experiments(run_id: str) -> pd.DataFrame:
         return pd.DataFrame()
     with connect(settings.db_path) as conn:
         rows = get_experiments_for_run(conn, run_id)
+    return pd.DataFrame(rows)
+
+
+@st.cache_data(ttl=30)
+def load_agent_activity(run_id: str) -> dict:
+    if not settings.db_path.exists():
+        return {
+            "explorer_proposals": 0,
+            "exploiter_proposals": 0,
+            "critic_vetoes": 0,
+            "veto_rate": 0.0,
+        }
+    with connect(settings.db_path) as conn:
+        return get_agent_activity_summary(conn, run_id)
+
+
+@st.cache_data(ttl=30)
+def load_critic_verdicts(run_id: str, limit: int = 50) -> pd.DataFrame:
+    if not settings.db_path.exists():
+        return pd.DataFrame()
+    with connect(settings.db_path) as conn:
+        rows = get_recent_critic_verdicts(conn, run_id, limit=limit)
     return pd.DataFrame(rows)
 
 
@@ -250,7 +274,14 @@ if not db_ok:
     )
     st.stop()
 
-tab_names = ["🏆 Rankings", "📊 OHLCV + Signals", "🔄 Run History", "🗄️ DB Stats", "🧬 Evolution"]
+tab_names = [
+    "🏆 Rankings",
+    "📊 OHLCV + Signals",
+    "🔄 Run History",
+    "🗄️ DB Stats",
+    "🧬 Evolution",
+    "🤖 Agent Activity",
+]
 tabs = st.tabs(tab_names)
 
 # ── tab 1: rankings ───────────────────────────────────────────────────────────
@@ -677,3 +708,122 @@ with tabs[4]:
                 }
             )
             st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+# ── tab 6: agent activity ─────────────────────────────────────────────────────
+
+with tabs[5]:
+    st.header("Agent Activity")
+    st.caption("Explorer / Exploiter proposals and Critic veto log — A2 multi-agent runs only.")
+
+    runs_df_agent = load_runs()
+    if runs_df_agent.empty:
+        st.info("No runs found. Run the pipeline first.")
+    else:
+        agent_run = st.selectbox(
+            "Select run",
+            runs_df_agent["run_id"].tolist(),
+            format_func=lambda r: (
+                f"{r} ({runs_df_agent.loc[runs_df_agent['run_id'] == r, 'started_at'].iloc[0][:16]})"
+            ),
+            key="agent_run_select",
+        )
+
+        activity = load_agent_activity(agent_run)
+        explorer_n = activity["explorer_proposals"]
+        exploiter_n = activity["exploiter_proposals"]
+        vetoes_n = activity["critic_vetoes"]
+        veto_rate = activity["veto_rate"]
+        total_reviewed = explorer_n + exploiter_n + vetoes_n
+
+        if total_reviewed == 0:
+            st.info(
+                "No multi-agent data for this run. "
+                "Run with A2 nodes (requires `llm_router` in PipelineDeps) to populate this tab."
+            )
+        else:
+            # ── top metrics ──
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Explorer proposals", explorer_n)
+            m2.metric("Exploiter proposals", exploiter_n)
+            m3.metric("Critic vetoes", vetoes_n)
+            m4.metric("Veto rate", f"{veto_rate:.1%}")
+
+            st.divider()
+
+            # ── role distribution chart ──
+            role_labels = []
+            role_counts = []
+            if explorer_n:
+                role_labels.append("Explorer")
+                role_counts.append(explorer_n)
+            if exploiter_n:
+                role_labels.append("Exploiter")
+                role_counts.append(exploiter_n)
+            if vetoes_n:
+                role_labels.append("Critic veto")
+                role_counts.append(vetoes_n)
+
+            if role_labels:
+                pie_fig = go.Figure(
+                    go.Pie(
+                        labels=role_labels,
+                        values=role_counts,
+                        marker_colors=["#388bfd", "#d2991a", "#f85149"],
+                        hole=0.4,
+                        textinfo="label+percent",
+                    )
+                )
+                pie_fig.update_layout(
+                    title="Proposal Distribution by Role",
+                    margin=dict(l=0, r=0, t=40, b=0),
+                    height=280,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    showlegend=False,
+                )
+                st.plotly_chart(pie_fig, use_container_width=True)
+
+            st.divider()
+
+            # ── critic verdicts table ──
+            st.subheader("Recent Critic Vetoes")
+            verdicts_df = load_critic_verdicts(agent_run, limit=50)
+
+            if verdicts_df.empty:
+                st.info("No critic vetoes logged for this run.")
+            else:
+
+                def _fmt_mutation(raw: str | None) -> str:
+                    if not raw:
+                        return "-"
+                    try:
+                        d = json.loads(raw)
+                        t = d.get("type", "?")
+                        parts = [t]
+                        if "fast" in d:
+                            parts.append(f"fast={d['fast']}")
+                        if "slow" in d:
+                            parts.append(f"slow={d['slow']}")
+                        if "period" in d:
+                            parts.append(f"period={d['period']}")
+                        return " ".join(parts)
+                    except Exception:
+                        return raw[:50]
+
+                tbl = verdicts_df[
+                    ["generation", "parent_name", "mutation_json", "reasoning", "created_at"]
+                ].copy()
+                tbl["mutation_json"] = tbl["mutation_json"].apply(_fmt_mutation)
+                tbl["reasoning"] = tbl["reasoning"].apply(
+                    lambda v: (v[:100] + "…") if v and len(v) > 100 else (v or "-")
+                )
+                tbl["created_at"] = tbl["created_at"].apply(lambda v: v[:16] if v else "-")
+                tbl = tbl.rename(
+                    columns={
+                        "generation": "gen",
+                        "parent_name": "parent",
+                        "mutation_json": "proposed config",
+                        "reasoning": "veto reason",
+                        "created_at": "time",
+                    }
+                )
+                st.dataframe(tbl, use_container_width=True, hide_index=True)

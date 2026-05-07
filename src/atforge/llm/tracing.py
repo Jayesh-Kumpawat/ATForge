@@ -81,11 +81,13 @@ def trace_node(
     enabled: bool = False,
     client: Any | None = None,
     metadata: dict[str, Any] | None = None,
+    tags: list[str] | None = None,
 ) -> Iterator[None]:
     """Wrap a pipeline node execution in a Langfuse span if `enabled`.
 
     Usage:
-        with trace_node("fetch_data", enabled=deps.tracing_enabled, metadata={"gen": 0}):
+        with trace_node("critic_node", enabled=deps.tracing_enabled,
+                        metadata={"gen": 0}, tags=["critic"]):
             ...node logic...
     """
     if not enabled:
@@ -98,12 +100,43 @@ def trace_node(
         client = get_client()
 
     t0 = time.monotonic()
-    with client.start_as_current_observation(
-        name=f"node.{node_name}",
-        as_type="span",
-        metadata=metadata or {},
-    ) as obs:
+    obs_kwargs: dict[str, Any] = {
+        "name": f"node.{node_name}",
+        "as_type": "span",
+        "metadata": metadata or {},
+    }
+    if tags is not None:
+        obs_kwargs["tags"] = tags
+
+    with client.start_as_current_observation(**obs_kwargs) as obs:
         yield
         obs.update(
             metadata={**(metadata or {}), "elapsed_ms": round((time.monotonic() - t0) * 1000)}
         )
+
+
+def score_current_observation(
+    name: str,
+    value: float,
+    *,
+    enabled: bool = False,
+    client: Any | None = None,
+    comment: str | None = None,
+) -> None:
+    """Score the currently active Langfuse observation. No-op when disabled.
+
+    Must be called inside an active trace_node or trace_completion context.
+    """
+    if not enabled:
+        return
+
+    if client is None:
+        from langfuse import get_client  # lazy import
+
+        client = get_client()
+
+    kwargs: dict[str, Any] = {"name": name, "value": value}
+    if comment is not None:
+        kwargs["comment"] = comment
+
+    client.score_current_observation(**kwargs)

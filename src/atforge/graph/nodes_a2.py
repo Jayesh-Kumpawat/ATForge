@@ -41,7 +41,7 @@ from atforge.evolution.research_prompts import (
 from atforge.graph.deps import AgentRoleConfig, PipelineDeps
 from atforge.graph.events import EvtCriticVerdict, EvtMutationProposed, EvtNodeDone, EvtNodeStart
 from atforge.graph.state import PipelineState
-from atforge.llm.tracing import trace_node
+from atforge.llm.tracing import score_current_observation, trace_node
 from atforge.storage.db import connect, txn
 from atforge.storage.repo import (
     get_top_strategies_for_generation,
@@ -182,6 +182,7 @@ def make_explorer_node(deps: PipelineDeps) -> Callable[[PipelineState], dict[str
             "explorer_node",
             enabled=deps.tracing_enabled,
             metadata={"generation": generation, "role": "explorer"},
+            tags=["explorer"],
         ):
             proposals = _proposals_from_mutators(deps, run_id, generation, role="explorer")
 
@@ -242,6 +243,7 @@ def make_exploiter_node(deps: PipelineDeps) -> Callable[[PipelineState], dict[st
             "exploiter_node",
             enabled=deps.tracing_enabled,
             metadata={"generation": generation, "role": "exploiter"},
+            tags=["exploiter"],
         ):
             exploiter_mutator = ResearchAgentMutator(
                 deps.llm_router,
@@ -335,71 +337,85 @@ def make_critic_node(deps: PipelineDeps) -> Callable[[PipelineState], dict[str, 
         tools = build_research_tools()
         vetoed: list[dict[str, Any]] = []
 
-        with connect(deps.db_path) as conn:
-            for proposal in current_proposals:
-                parent_sid = proposal["parent_strategy_id"]
-                child_config = proposal["child_config"]
-                fingerprint = proposal["fingerprint"]
+        with trace_node(
+            "critic_node",
+            enabled=deps.tracing_enabled,
+            metadata={"generation": generation, "role": "critic"},
+            tags=["critic"],
+        ):
+            with connect(deps.db_path) as conn:
+                for proposal in current_proposals:
+                    parent_sid = proposal["parent_strategy_id"]
+                    child_config = proposal["child_config"]
+                    fingerprint = proposal["fingerprint"]
 
-                raw = run_react_loop(
-                    deps.llm_router,
-                    tools,
-                    role_cfg.system_prompt,
-                    critic_initial_message(proposal),
-                    conn,
-                    max_iterations=role_cfg.max_iterations,
-                    event_bus=deps.event_bus,
-                    role="critic",
-                    parent_strategy_id=parent_sid,
-                    temperature=role_cfg.temperature,
-                    trace_name="critic_agent",
-                )
-
-                verdict = _parse_critic_verdict(raw)
-
-                # Emit verdict event regardless of outcome
-                if deps.event_bus:
-                    deps.event_bus.emit(
-                        EvtCriticVerdict(
-                            parent_strategy_id=parent_sid,
-                            fingerprint=fingerprint,
-                            verdict=verdict.verdict if verdict else "accept",
-                            reason=verdict.reason if verdict else "parse_failed_safe_accept",
-                        )
+                    raw = run_react_loop(
+                        deps.llm_router,
+                        tools,
+                        role_cfg.system_prompt,
+                        critic_initial_message(proposal),
+                        conn,
+                        max_iterations=role_cfg.max_iterations,
+                        event_bus=deps.event_bus,
+                        role="critic",
+                        parent_strategy_id=parent_sid,
+                        temperature=role_cfg.temperature,
+                        trace_name="critic_agent",
                     )
 
-                if verdict and verdict.verdict == "veto":
-                    veto_record = {
-                        "generation": generation,
-                        "parent_strategy_id": parent_sid,
-                        "child_config": child_config,
-                        "fingerprint": fingerprint,
-                        "veto_reason": verdict.reason,
-                        "role": "critic",
-                    }
-                    vetoed.append(veto_record)
+                    verdict = _parse_critic_verdict(raw)
 
-                    try:
-                        with txn(conn):
-                            insert_experiment(
-                                conn,
-                                run_id=run_id,
-                                generation=generation,
+                    # Emit verdict event regardless of outcome
+                    if deps.event_bus:
+                        deps.event_bus.emit(
+                            EvtCriticVerdict(
                                 parent_strategy_id=parent_sid,
-                                child_strategy_id=None,
-                                mutator="critic_veto",
-                                mutation_json=json.dumps(child_config, sort_keys=True),
-                                accepted=0,
-                                delta_sharpe=0.0,
-                                composite_score_json=json.dumps({"critic_veto": 1.0}),
-                                reasoning=verdict.reason,
+                                fingerprint=fingerprint,
+                                verdict=verdict.verdict if verdict else "accept",
+                                reason=verdict.reason if verdict else "parse_failed_safe_accept",
                             )
-                    except Exception as exc:
-                        log.warning(
-                            "critic_veto_log_failed",
-                            fingerprint=fingerprint,
-                            error=str(exc),
                         )
+
+                    if verdict and verdict.verdict == "veto":
+                        veto_record = {
+                            "generation": generation,
+                            "parent_strategy_id": parent_sid,
+                            "child_config": child_config,
+                            "fingerprint": fingerprint,
+                            "veto_reason": verdict.reason,
+                            "role": "critic",
+                        }
+                        vetoed.append(veto_record)
+
+                        try:
+                            with txn(conn):
+                                insert_experiment(
+                                    conn,
+                                    run_id=run_id,
+                                    generation=generation,
+                                    parent_strategy_id=parent_sid,
+                                    child_strategy_id=None,
+                                    mutator="critic_veto",
+                                    mutation_json=json.dumps(child_config, sort_keys=True),
+                                    accepted=0,
+                                    delta_sharpe=0.0,
+                                    composite_score_json=json.dumps({"critic_veto": 1.0}),
+                                    reasoning=verdict.reason,
+                                )
+                        except Exception as exc:
+                            log.warning(
+                                "critic_veto_log_failed",
+                                fingerprint=fingerprint,
+                                error=str(exc),
+                            )
+
+            veto_rate = len(vetoed) / len(current_proposals) if current_proposals else 0.0
+            score_current_observation(
+                "veto_rate",
+                veto_rate,
+                enabled=deps.tracing_enabled,
+                comment=f"{len(vetoed)}/{len(current_proposals)} vetoed",
+            )
 
         log.info(
             "critic_node_done",

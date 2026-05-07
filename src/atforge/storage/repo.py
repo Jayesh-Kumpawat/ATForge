@@ -357,3 +357,64 @@ def get_mutation_tree(
         SELECT * FROM tree ORDER BY depth, experiment_id
     """
     return [dict(r) for r in conn.execute(query, (root_strategy_id, max_depth)).fetchall()]
+
+
+def get_agent_activity_summary(
+    conn: sqlite3.Connection,
+    run_id: str,
+) -> dict[str, Any]:
+    """Per-role proposal/veto counts for the Agent Activity dashboard tab.
+
+    Returns:
+        explorer_proposals  — count of explorer experiments (any accepted value)
+        exploiter_proposals — count of exploiter experiments
+        critic_vetoes       — count of critic_veto experiments
+        veto_rate           — critic_vetoes / (explorer + exploiter + critic_vetoes)
+                              0.0 when no multi-agent experiments exist
+    """
+    rows = conn.execute(
+        """
+        SELECT mutator, COUNT(*) AS n
+        FROM experiments
+        WHERE run_id = ? AND mutator IN ('explorer', 'exploiter', 'critic_veto')
+        GROUP BY mutator
+        """,
+        (run_id,),
+    ).fetchall()
+
+    counts: dict[str, int] = {r["mutator"]: r["n"] for r in rows}
+    explorer = counts.get("explorer", 0)
+    exploiter = counts.get("exploiter", 0)
+    vetoes = counts.get("critic_veto", 0)
+    total = explorer + exploiter + vetoes
+    veto_rate = vetoes / total if total > 0 else 0.0
+
+    return {
+        "explorer_proposals": explorer,
+        "exploiter_proposals": exploiter,
+        "critic_vetoes": vetoes,
+        "veto_rate": veto_rate,
+    }
+
+
+def get_recent_critic_verdicts(
+    conn: sqlite3.Connection,
+    run_id: str,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Most recent critic_veto experiment rows for a run, newest first."""
+    rows = conn.execute(
+        """
+        SELECT e.experiment_id, e.generation, e.parent_strategy_id,
+               e.child_strategy_id, e.mutator, e.mutation_json,
+               e.accepted, e.reasoning, e.created_at,
+               s.name AS parent_name
+        FROM experiments e
+        LEFT JOIN strategies s ON e.parent_strategy_id = s.strategy_id
+        WHERE e.run_id = ? AND e.mutator = 'critic_veto'
+        ORDER BY e.created_at DESC
+        LIMIT ?
+        """,
+        (run_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
