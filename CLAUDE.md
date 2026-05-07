@@ -93,8 +93,12 @@ START → load_universe → fetch_data → detect_patterns
 
 ## Phase status
 - **Phase 1** ✅ complete — data + patterns + backtest + storage + ranking
-- **Phase 2a** ✅ complete — LLM wrapper + parallel backtest + mutators + ratchet + evolution loop (234 tests)
+- **Phase 2a** ✅ complete — LLM wrapper + parallel backtest + mutators + ratchet + evolution loop
 - **A1** ✅ complete — ReAct research agent, tool calling (all 5 providers), ResearchAgentMutator
+- **A2 Phase 6** ✅ complete — 4-node multi-agent topology: explorer/exploiter/critic/aggregate nodes, AgentRoleConfig, proposed_mutations + vetoed_mutations reducers (250 tests)
+- **A2 Phase 7** 🔄 next — critic agent logic: tool-using LLM per proposal, query_strategy_lineage veto detection, experiments table logging with mutator='critic_veto'
+- **A2 Phase 8** 🔄 next — per-role config (AgentRoleConfig wired to CLI flags / atforge.yaml), exploiter_node fully wired
+- **A2 Phase 9** 🔄 next — Langfuse trace polish, Streamlit dashboard agent activity tab
 - **Phase 2b** deferred — OpenEvolve population dynamics, Qdrant similarity dedup, per-symbol ratchet, bootstrap significance
 - **Phase 3** deferred — HITL Telegram approval, paper trading, Kite broker integration
 
