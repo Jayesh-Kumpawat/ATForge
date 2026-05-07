@@ -14,6 +14,20 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class AgentRoleConfig:
+    """Per-role configuration for A2 multi-agent nodes.
+
+    Phase 6: used by explorer/exploiter/critic to configure LLM behaviour.
+    Phase 8 will wire llm_priority and model overrides from CLI/YAML.
+    """
+
+    role: str  # "explorer" | "exploiter" | "critic"
+    temperature: float  # exploration level — 0.9 explorer, 0.4 exploiter
+    max_iterations: int  # ReAct loop bound
+    system_prompt: str  # role-specific system prompt injected at call time
+
+
+@dataclass(frozen=True)
 class PipelineDeps:
     data_provider: DataProvider
     detectors: tuple[PatternDetector, ...]
@@ -33,6 +47,10 @@ class PipelineDeps:
     # Observability — both optional, off by default so existing tests need no changes
     tracing_enabled: bool = False
     event_bus: Any | None = None  # EventBus | None (Any avoids frozen-dataclass issues)
+
+    # A2 multi-agent role configs — empty dict = use Phase 6 defaults in each node.
+    # Phase 8 will populate from CLI flags / atforge.yaml.
+    role_configs: dict[str, AgentRoleConfig] = field(default_factory=dict)
 
     def ensure_dirs(self) -> None:
         self.ohlcv_cache_dir.mkdir(parents=True, exist_ok=True)

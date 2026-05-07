@@ -73,27 +73,44 @@ def _seed_db(db: Path) -> tuple[str, int]:
         insert_run(conn, run_id)
         sid = upsert_strategy(conn, "sma_test", "indicator", {"fast": 10, "slow": 30})
         sig_id = insert_pattern_signal(
-            conn, run_id=run_id, strategy_id=sid, symbol="RELIANCE",
-            n_signals=5, first_date="2024-01-01", last_date="2024-12-31",
+            conn,
+            run_id=run_id,
+            strategy_id=sid,
+            symbol="RELIANCE",
+            n_signals=5,
+            first_date="2024-01-01",
+            last_date="2024-12-31",
         )
         insert_backtest_result(
-            conn, run_id=run_id, signal_id=sig_id, strategy_id=sid,
+            conn,
+            run_id=run_id,
+            signal_id=sig_id,
+            strategy_id=sid,
             result=BacktestResult(
-                success=True, pattern_name="sma_test", symbol="RELIANCE",
+                success=True,
+                pattern_name="sma_test",
+                symbol="RELIANCE",
                 metrics={
-                    "total_return": Decimal("0.12"), "final_value": Decimal("112000"),
-                    "max_drawdown": Decimal("-0.05"), "sharpe": 1.8,
-                    "sortino": 2.1, "cagr": 0.15, "win_rate": 0.6,
+                    "total_return": Decimal("0.12"),
+                    "final_value": Decimal("112000"),
+                    "max_drawdown": Decimal("-0.05"),
+                    "sharpe": 1.8,
+                    "sortino": 2.1,
+                    "cagr": 0.15,
+                    "win_rate": 0.6,
                 },
                 n_trades=10,
             ),
-            hold_bars=10, fees=0.0, slippage=0.0, init_cash=Decimal("100000"),
+            hold_bars=10,
+            fees=0.0,
+            slippage=0.0,
+            init_cash=Decimal("100000"),
         )
     return run_id, sid
 
 
 def test_query_top_strategies_handler(tools, db: Path) -> None:
-    run_id, _ = _seed_db(db)
+    _run_id, _ = _seed_db(db)
     handler = _handler_for(tools, "query_top_strategies")
     with connect(db) as conn:
         result = handler({"limit": 5}, conn)
@@ -117,10 +134,17 @@ def test_query_recent_experiments_handler(tools, db: Path) -> None:
     with connect(db) as conn, txn(conn):
         child_id = upsert_strategy(conn, "sma_child", "indicator", {"fast": 12, "slow": 30})
         insert_experiment(
-            conn, run_id=run_id, generation=1,
-            parent_strategy_id=sid, child_strategy_id=child_id,
-            mutator="param_delta", mutation_json="{}", accepted=1,
-            delta_sharpe=0.3, composite_score_json="{}", reasoning="better",
+            conn,
+            run_id=run_id,
+            generation=1,
+            parent_strategy_id=sid,
+            child_strategy_id=child_id,
+            mutator="param_delta",
+            mutation_json="{}",
+            accepted=1,
+            delta_sharpe=0.3,
+            composite_score_json="{}",
+            reasoning="better",
         )
     handler = _handler_for(tools, "query_recent_experiments")
     with connect(db) as conn:
@@ -134,10 +158,17 @@ def test_query_recent_experiments_accepted_only_filter(tools, db: Path) -> None:
     with connect(db) as conn, txn(conn):
         child_id = upsert_strategy(conn, "sma_bad", "indicator", {"fast": 8, "slow": 30})
         insert_experiment(
-            conn, run_id=run_id, generation=1,
-            parent_strategy_id=sid, child_strategy_id=child_id,
-            mutator="param_delta", mutation_json="{}", accepted=0,
-            delta_sharpe=-0.1, composite_score_json="{}", reasoning="worse",
+            conn,
+            run_id=run_id,
+            generation=1,
+            parent_strategy_id=sid,
+            child_strategy_id=child_id,
+            mutator="param_delta",
+            mutation_json="{}",
+            accepted=0,
+            delta_sharpe=-0.1,
+            composite_score_json="{}",
+            reasoning="worse",
         )
     handler = _handler_for(tools, "query_recent_experiments")
     with connect(db) as conn:

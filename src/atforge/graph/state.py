@@ -37,3 +37,8 @@ class PipelineState(TypedDict, total=False):
     failures: Annotated[list[dict], operator.add]
     # Mutation records accumulated across generations (generation, parent/child strategy_ids, etc.)
     mutations: Annotated[list[dict[str, Any]], operator.add]
+
+    # A2 multi-agent state — accumulated across nodes within each generation.
+    # Both carry a `generation` field so aggregate_node can filter correctly in a loop.
+    proposed_mutations: Annotated[list[dict[str, Any]], operator.add]  # explorer + exploiter output
+    vetoed_mutations: Annotated[list[dict[str, Any]], operator.add]  # critic output
