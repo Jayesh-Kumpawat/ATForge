@@ -160,6 +160,30 @@ At gen=0, there are no mutations and no parent/child pairs. `state["mutations"]`
 
 ---
 
+### `critic_veto` experiment rows have `child_strategy_id=NULL`
+
+**Rule:** When `critic_node` vetoes a proposal, it calls `insert_experiment` with `child_strategy_id=None`. Never pass a strategy_id for a proposal that was never backed by a backtest.
+
+**Why:**
+
+A critic-vetoed proposal never reaches `aggregate_node`, so `upsert_strategy` is never called for it. There is no DB row, no strategy_id, and no backtest result. Passing a fabricated ID would corrupt the `experiments` table's foreign key semantics and break the `get_strategy_children` lineage query.
+
+The SQL column is nullable specifically to distinguish:
+- `child_strategy_id=NULL` → critic rejected before backtest (pre-filter)
+- `child_strategy_id=N, accepted=0` → ratchet rejected after backtest (post-filter)
+
+---
+
+### `score_current_observation` must be called inside an active trace context
+
+**Rule:** Call `score_current_observation` only inside a `trace_node` or `trace_completion` context manager block.
+
+**Why:**
+
+Langfuse's `score_current_observation` uses an ambient observation context (OTEL-style). Outside a trace context, `client.score_current_observation()` raises `LangfuseNotFound` or silently no-ops depending on the SDK version. The `enabled=False` guard in the wrapper handles the disabled path cleanly, but when enabled, the active span must exist.
+
+---
+
 ## 2. Architecture decisions
 
 <!-- section:architecture -->
@@ -252,8 +276,30 @@ Every LLM call goes through `llm/tracing.py:trace_node` context manager, which c
 - Input prompt and output response
 - Which node called it (`trace_name="param_delta_sma"` etc.)
 
+**A2 additions (Phase 9):** `trace_node` accepts a `tags` list for per-role filtering in the Langfuse UI (`tags=["critic"]`, `tags=["explorer"]`). `score_current_observation` attaches numeric scores to the active span — used by `critic_node` to record `veto_rate` (fraction of proposals vetoed per generation).
+
 **Why Langfuse over raw logging?**  
 structlog gives you structured text logs, which are good for node-level events. Langfuse gives you an LLM-native trace UI where you can see multi-turn conversation context, compare runs, and catch regressions in response quality. They serve different purposes — both run simultaneously.
+
+---
+
+### Multi-agent topology — explorer / exploiter / critic / aggregate
+
+**Decision:** Replace the single `mutate_strategies` node with 4 specialized A2 nodes.
+
+**Why not a single LLM mutation node?**
+
+| | Single `mutate_strategies` | A2 4-node topology |
+|---|---|---|
+| Exploration diversity | Low — same prompt, same temperature | High — explorer pushes novel space, exploiter refines winners |
+| Pre-backtest filtering | None — every proposal backtested | Critic hard-vetoes redundant proposals (saves compute) |
+| Observability | One span per run | Per-role spans, `veto_rate` score, `EvtCriticVerdict` events |
+| Lineage awareness | Mutators are stateless | Critic uses ReAct+tools to check historical lineage before deciding |
+| Configuration | Hardcoded temperature | `atforge.yaml` per-role config (temperature, max_iterations, llm_priority) |
+
+**Why hard-veto instead of soft scoring?**
+
+The critic runs *before* backtesting. At this point there is no performance data for the proposed child — only historical data about similar mutations. A soft score would require a threshold anyway. Hard-veto is simpler, the rationale is logged (SQL + EventBus), and the Agent Activity dashboard makes the veto rate visible.
 
 ---
 

@@ -16,10 +16,10 @@
 2. Detects 13 chart patterns per symbol — 10 TA-Lib CDL patterns + SMA crossovers + RSI reclaim
 3. Backtests every `(symbol × pattern)` combination with proper lookahead prevention
 4. Stores ranked results in SQLite with full metrics (Sharpe, Sortino, CAGR, win rate)
-5. *(Phase 2)* Uses LLMs to mutate strategy parameters overnight via OpenEvolve + AutoResearch ratchet
+5. Runs a multi-agent A2 system: explorer proposes mutations, exploiter refines top performers, critic hard-vetoes bad proposals, ratchet accepts only statistically improved children
 6. *(Phase 3)* Human approves each strategy before paper/live trade executes
 
-**Phase 2a is complete:** 185 tests passing, full evolution loop runs end-to-end — LLM mutation, parallel backtests via `Send()` fan-out, AutoResearch ratchet, multi-generation cycling.
+**A2 is complete:** 289 tests passing, full multi-agent evolution loop — explorer/exploiter/critic/aggregate nodes, ResearchAgentMutator with ReAct tool-calling, Langfuse trace tags, Agent Activity dashboard.
 
 ---
 
@@ -27,21 +27,24 @@
 
 ```
 CLI (Typer)
-    └── LangGraph Pipeline (Phase 2a — evolution loop)
+    └── LangGraph Pipeline (A2 — multi-agent evolution loop)
             ├── load_universe       — Nifty 50 or --symbols arg
             ├── fetch_data          — CachedProvider → FallbackDataProvider → [openchart|jugaad|yfinance]
             ├── detect_patterns     — 13 PatternDetectors (TA-Lib CDL, SMA cross, RSI reclaim)
             ├── [Send×N] run_backtest_one  — parallel per signal via LangGraph Send API
+            ├── ratchet_node        — no-op gen=0; judge_mutation() Δsharpe≥0.05 ∧ Δsortino≥0.02 on gen≥1
             ├── rank                — top_rankings() from SQLite, rich table output
-            ├── mutate_strategies   — LLM proposes param_delta / composition mutations
-            ├── ratchet_node        — judge_mutation(): accept if Δsharpe≥0.05 ∧ Δsortino≥0.02
+            ├── explorer_node       — ResearchAgentMutator (high-temp), proposes novel mutations
+            ├── exploiter_node      — ResearchAgentMutator (low-temp), refines top performers
+            ├── critic_node         — ReAct loop hard-veto; logs critic_veto rows to experiments
+            ├── aggregate_node      — filters vetoed, upserts survivors
             └── loop_decision ──────→ "continue" → advance_generation → detect_patterns (loop)
                                     → "stop"    → END
 
-Storage: SQLite (WAL + JSON1 + FTS5) — 5 tables + experiments table (ratchet verdicts)
+Storage: SQLite (WAL + JSON1 + FTS5) — 5 tables + experiments table (ratchet + critic verdicts)
 LLMs:    Gemini 2.5 Flash (primary) → Groq (burst) → OpenRouter → Ollama Qwen2.5-Coder (fallback)
-Traces:  Langfuse Cloud — every LLM call traced with prompt, response, provider, latency
-Dashboard: Streamlit 5-tab — Rankings | OHLCV+Signals | Run History | DB Stats | Evolution
+Traces:  Langfuse Cloud — every LLM call + node traced with tags, veto_rate scores
+Dashboard: Streamlit 6-tab — Rankings | OHLCV+Signals | Run History | DB Stats | Evolution | Agent Activity
 ```
 
 Full architecture with Mermaid diagrams → [`ARCHITECTURE.md`](ARCHITECTURE.md)
@@ -77,7 +80,7 @@ Full architecture with Mermaid diagrams → [`ARCHITECTURE.md`](ARCHITECTURE.md)
 | Runtime LLMs | Gemini 2.5 Flash + Groq + OpenRouter + Ollama | 5,000+ free requests/day, provider fallback chain |
 | Observability | Langfuse Cloud | LLM call tracing, every prompt/response logged |
 | Evolution engine | AutoResearch ratchet (Phase 2a) | Δsharpe/Δsortino/drawdown acceptance criterion |
-| Dashboard | Streamlit | 5 tabs, Plotly candlestick charts + evolution charts |
+| Dashboard | Streamlit | 6 tabs, Plotly candlestick charts + evolution + agent activity |
 | CLI | Typer | `pipeline`, `rank`, `inspect` commands |
 
 ---
@@ -108,7 +111,7 @@ uv run python main.py experiments --run <run_id>
 # View rankings across all runs
 uv run python main.py rank --top 20
 
-# Dashboard (Rankings | OHLCV+Signals | Run History | DB Stats | Evolution)
+# Dashboard (Rankings | OHLCV+Signals | Run History | DB Stats | Evolution | Agent Activity)
 uv run streamlit run dashboard.py
 
 # Browse raw DB — all tables, full experiment log
@@ -122,7 +125,8 @@ uvx datasette data/atforge.db
 ```
 ATForge/
 ├── main.py                     Entry point
-├── dashboard.py                Streamlit 5-tab dashboard
+├── dashboard.py                Streamlit 6-tab dashboard
+├── atforge.yaml                A2 agent role configuration (explorer/exploiter/critic)
 ├── src/atforge/
 │   ├── config.py               pydantic-settings, .env loading
 │   ├── cli.py                  Typer CLI (pipeline, rank, inspect)
@@ -130,10 +134,10 @@ ATForge/
 │   ├── patterns/               PatternDetector protocol + 3 detector types
 │   ├── backtest/               vectorbt engine, BacktestResult, Decimal money
 │   ├── storage/                SQLite schema, repo functions, WAL config
-│   ├── graph/                  LangGraph state, deps, nodes (Phase 1), nodes_phase2 (evolution loop)
+│   ├── graph/                  LangGraph state, deps, nodes (Phase 1), nodes_phase2 (evolution), nodes_a2 (multi-agent)
 │   ├── llm/                    Provider registry, router, Langfuse tracing
 │   └── evolution/              Mutators (param_delta, composition), ratchet, detector registry
-├── tests/                      182 tests — E2E, unit, integration
+├── tests/                      289 tests — E2E, unit, integration
 ├── ARCHITECTURE.md             6 Mermaid diagrams covering every component
 └── CONTEXT.md                  Full vision, tool choices, phase plan
 ```
@@ -146,6 +150,8 @@ ATForge/
 |---|---|---|
 | **1 — Foundation** | **Complete** | Data pipeline → pattern detection → backtesting → SQLite → dashboard |
 | **2a — Evolution Loop** | **Complete** | LLM mutation, `Send()` parallel backtests, AutoResearch ratchet, multi-generation cycling |
+| **A1 — Research Agent** | **Complete** | ReAct loop, tool calling (Gemini), ResearchAgentMutator, 5 DB read tools |
+| **A2 — Multi-Agent** | **Complete** | Explorer/exploiter/critic/aggregate topology, critic hard-veto, Langfuse trace tags, Agent Activity tab (289 tests) |
 | 2b — Evolution Depth | Deferred | OpenEvolve population dynamics, Qdrant similarity dedup, per-symbol ratchet, bootstrap significance |
 | 3 — HITL & Execution | Deferred | Telegram approval, paper trading, Zerodha Kite broker |
 | 4 — Scale | Deferred | Multi-strategy portfolio, regime detection, Langfuse dashboards |
@@ -161,6 +167,7 @@ ATForge/
 | **🔄 Run History** | All pipeline runs — status, duration, backtest counts, failures |
 | **🗄️ DB Stats** | Row counts per table, strategy families breakdown |
 | **🧬 Evolution** | Sharpe-by-generation bar chart, accept/reject pie, full mutations table with Δsharpe and ratchet reasoning |
+| **🤖 Agent Activity** | Explorer/exploiter/critic proposal + veto counts, recent critic verdicts with reasoning |
 
 ---
 
@@ -169,7 +176,7 @@ ATForge/
 ### 1 — Automated test suite
 ```bash
 uv run pytest -q
-# Expect: 182 passed
+# Expect: 289 passed
 ```
 
 ### 2 — Run a 2-generation evolution (end-to-end smoke test)
@@ -210,7 +217,7 @@ uvx datasette data/atforge.db
 ## Development
 
 ```bash
-uv run pytest -q                                   # run all 182 tests
+uv run pytest -q                                   # run all 289 tests
 uv run pytest tests/graph/test_pipeline.py         # single test file
 uv run ruff check --fix && uv run ruff format      # lint + format
 uv run python main.py inspect <run_id>             # run metadata + failure summary

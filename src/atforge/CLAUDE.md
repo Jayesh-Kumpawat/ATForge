@@ -10,7 +10,11 @@
 |---|---|---|
 | **Phase 1 — Foundation** | ✅ Complete | Data + patterns + backtest + storage + ranking |
 | **Phase 2a — Evolution Loop** | ✅ Complete | LLM wrapper + parallel backtest + mutators + ratchet |
-| **A1 — Research Agent** | ✅ Complete | ReAct loop, tool calling (5 providers), ResearchAgentMutator (234 tests) |
+| **A1 — Research Agent** | ✅ Complete | ReAct loop, tool calling (5 providers), ResearchAgentMutator |
+| **A2 Phase 6** | ✅ Complete | 4-node multi-agent topology: explorer/exploiter/critic/aggregate, AgentRoleConfig |
+| **A2 Phase 7** | ✅ Complete | Critic ReAct loop, hard-veto, EvtCriticVerdict, llm_router on PipelineDeps |
+| **A2 Phase 8** | ✅ Complete | AgentRoleConfig(llm_priority, model), atforge.yaml, exploiter wired |
+| **A2 Phase 9** | ✅ Complete | Langfuse trace tags, veto scoring, Agent Activity dashboard (289 tests) |
 | Phase 2b — Evolution Depth | 🔄 Deferred | OpenEvolve population, Qdrant dedup, bootstrap significance |
 | Phase 3 — HITL & Execution | 🔄 Deferred | Telegram approval, paper trading, Kite broker |
 
@@ -139,10 +143,10 @@ ratchet_thresholds=RatchetThresholds(
 ## Useful shortcuts
 
 ```bash
-uv run pytest -q                          # all 234 tests
+uv run pytest -q                          # all 289 tests
 uv run ruff check --fix && uv run ruff format
 uvx datasette data/atforge.db             # browse DB in browser
-uv run streamlit run dashboard.py         # 5-tab dashboard
+uv run streamlit run dashboard.py         # 6-tab dashboard
 uv run python main.py pipeline --symbols RELIANCE --lookback 6m
 uv run python main.py pipeline --symbols RELIANCE --lookback 1y --max-generations 2
 uv run python main.py experiments --run <run_id>

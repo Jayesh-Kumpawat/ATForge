@@ -462,7 +462,9 @@ Two fundamentally different merge behaviors in `PipelineState`:
 | `signal_refs` | **reducer** | `Annotated[list, operator.add]` | Multiple workers each return their own delta |
 | `backtest_ids` | **reducer** | `Annotated[list, operator.add]` | 26 parallel workers each return `[bid]` |
 | `failures` | **reducer** | `Annotated[list, operator.add]` | Any node can append failures |
-| `mutations` | **reducer** | `Annotated[list, operator.add]` | Accumulates across generations |
+| `mutations` | **reducer** | `Annotated[list, operator.add]` | Accepted mutations written by aggregate_node |
+| `proposed_mutations` | **reducer** | `Annotated[list, operator.add]` | Explorer + exploiter proposals (A2) |
+| `vetoed_mutations` | **reducer** | `Annotated[list, operator.add]` | Critic-vetoed configs (A2) |
 
 ### Critical rule for reducer fields
 
@@ -478,26 +480,28 @@ return {"backtest_ids": [new_bid]}
 
 LangGraph calls `operator.add(existing, returned)` to merge. If you return the full list, LangGraph extends the existing list with it — duplicating everything.
 
-### State evolution across 2 generations
+### State evolution across 2 generations (A2 topology)
 
-| After node | `generation` | `detector_configs` | `signal_refs` | `backtest_ids` | `mutations` |
-|---|---|---|---|---|---|
-| *invoke()* | 0 | absent | absent | absent | absent |
-| `load_universe` | 0 | 13 configs | absent | absent | absent |
-| `fetch_data` | 0 | 13 | absent | absent | absent |
-| `detect_patterns` (gen=0) | 0 | 13 | **26** | absent | absent |
-| `run_backtest_one` ×26 | 0 | 13 | 26 | **25** | absent |
-| `rank` | 0 | 13 | 26 | 25 | absent |
-| `mutate_strategies` | 0 | 13 | 26 | 25 | **5** |
-| `ratchet_node` (no-op) | 0 | 13 | 26 | 25 | 5 |
-| `loop_decision` → continue | 0 | 13 | 26 | 25 | 5 |
-| `advance_generation` | **1** | **5** ← overwritten | 26 | 25 | 5 |
-| `detect_patterns` (gen=1) | 1 | 5 | **36** | 25 | 5 |
-| `run_backtest_one` ×10 | 1 | 5 | 36 | **34** | 5 |
-| `rank` | 1 | 5 | 36 | 34 | 5 |
-| `mutate_strategies` (skipped) | 1 | 5 | 36 | 34 | 5 |
-| `ratchet_node` (active) | 1 | 5 | 36 | 34 | 5 |
-| `loop_decision` → stop | 1 | 5 | 36 | 34 | 5 |
+| After node | `generation` | `detector_configs` | `signal_refs` | `backtest_ids` | `mutations` | `proposed_mutations` |
+|---|---|---|---|---|---|---|
+| *invoke()* | 0 | absent | absent | absent | absent | absent |
+| `load_universe` | 0 | 13 configs | absent | absent | absent | absent |
+| `fetch_data` | 0 | 13 | absent | absent | absent | absent |
+| `detect_patterns` (gen=0) | 0 | 13 | **26** | absent | absent | absent |
+| `run_backtest_one` ×26 | 0 | 13 | 26 | **25** | absent | absent |
+| `ratchet_node` (no-op gen=0) | 0 | 13 | 26 | 25 | absent | absent |
+| `rank` | 0 | 13 | 26 | 25 | absent | absent |
+| `explorer_node` | 0 | 13 | 26 | 25 | absent | **3** |
+| `exploiter_node` | 0 | 13 | 26 | 25 | absent | **5** |
+| `critic_node` (vetoes 1) | 0 | 13 | 26 | 25 | absent | 5 |
+| `aggregate_node` | 0 | 13 | 26 | 25 | **4** | 5 |
+| `advance_generation` | **1** | **4** ← overwritten | 26 | 25 | 4 | 5 |
+| `detect_patterns` (gen=1) | 1 | 4 | **36** | 25 | 4 | 5 |
+| `run_backtest_one` ×8 | 1 | 4 | 36 | **33** | 4 | 5 |
+| `ratchet_node` (active) | 1 | 4 | 36 | 33 | 4 | 5 |
+| `rank` | 1 | 4 | 36 | 33 | 4 | 5 |
+| `explorer_node` + `exploiter_node` + `critic_node` + `aggregate_node` (skipped — gen+1≥max) | 1 | 4 | 36 | 33 | 4 | 5 |
+| `loop_decision` → stop | 1 | 4 | 36 | 33 | 4 | 5 |
 
 Note: `signal_refs` grows from 26 → 36 across generations. `backtest_ids` grows from 25 → 34. These are cumulative — all generations' data stays in state via reducers.
 
@@ -602,37 +606,30 @@ EvaluationResult(
 )
 ```
 
-**`mutate_strategies` LLM calls for gen=0:**
+**A2 multi-agent mutation for gen=0:**
+
+`explorer_node` runs `ResearchAgentMutator` at high temperature (0.9). Uses `build_research_tools(deps)` — 5 read-only DB tools (`query_top_strategies`, `query_strategy_details`, `query_strategy_lineage`, `query_pattern_performance`, `query_recent_experiments`). ReAct loop up to `max_iterations` turns. Final output: `ResearchProposal` JSON validated by Pydantic. Events `EvtAgentToolCall` and `EvtAgentReasoning` emitted each iteration.
+
+`exploiter_node` runs the same `ResearchAgentMutator` at low temperature (0.4), targeting the top-N strategies by Sharpe for incremental refinement.
+
+Explorer + exploiter proposals are deduplicated by fingerprint (`parent_id + canonical JSON`), then accumulated in `state["proposed_mutations"]` via reducer.
+
+`critic_node` reviews each proposal with a bounded ReAct loop (up to 3 turns). On veto:
+- calls `insert_experiment(mutator="critic_veto", child_strategy_id=None, accepted=False)`
+- emits `EvtCriticVerdict` to `EventBus`
+- scores `veto_rate` on active Langfuse span via `score_current_observation`
 
 ```
-ParamDeltaMutator processes SMA_CROSS(10,25):
-  Prompt includes: current fast=10, slow=25, Sharpe=0.70, n_trades=34
-  LLM response:    {"fast": 8, "slow": 22, "reasoning": "Tighter window captures ..."}
-  → child_config: {"type": "sma_crossover", "fast": 8, "slow": 22}
-  → upsert_strategy → strategy_id=14
-
-ParamDeltaMutator processes SMA_CROSS(5,20):
-  Prompt: fast=5, slow=20, Sharpe=0.71
-  LLM response: {"fast": 6, "slow": 18, "reasoning": "Shorter periods reduce lag ..."}
-  → strategy_id=15
-
-ParamDeltaMutator processes RSI_OVERSOLD(14,30):
-  Prompt: period=14, oversold=30, Sharpe=0.64
-  LLM response: {"period": 10, "oversold": 25, "reasoning": "Lower period ..."}
-  → strategy_id=16
-
-CompositionMutator processes pair (SMA_CROSS(10,25), RSI_OVERSOLD(14,30)):
-  LLM response: {"op": "AND", "reasoning": "AND filters SMA crossovers with RSI confirmation ..."}
-  → child_config: {"type": "and", "left": {sma_10_25}, "right": {rsi_14_30}}
-  → strategy_id=17
-
-CompositionMutator processes pair (CDL_HAMMER, SMA_CROSS(5,20)):
-  LLM response: {"op": "OR", "reasoning": "OR captures either candlestick reversal or trend ..."}
-  → child_config: {"type": "or", "left": {cdl_hammer}, "right": {sma_5_20}}
-  → strategy_id=18
+critic_node example for gen=0:
+  Proposal: SMA_CROSS(8,22) — explorer proposes tighter window
+    critic checks lineage → parent already tried (8,22) in run_id=prev → VETO
+    insert_experiment: mutator="critic_veto", child_strategy_id=NULL, accepted=0
+  Proposal: AND(SMA_10_25, RSI_10_25) — novel composition
+    critic checks → no prior experiments with this combo → ACCEPT
+    passes to aggregate_node
 ```
 
-**ResearchAgentMutator** (name=`"research"`, enabled via `--mutators research`) runs a ReAct loop (up to 6 turns) before proposing. Each loop iteration can call one of 5 read-only DB tools (`query_top_strategies`, `query_strategy_details`, `query_strategy_lineage`, `query_pattern_performance`, `query_recent_experiments`) to inspect past results before choosing parameters. Final output is a `ResearchProposal` JSON validated by Pydantic — same child config structure as `ParamDeltaMutator`. Events `EvtAgentToolCall` and `EvtAgentReasoning` are emitted to the `EventBus` each iteration.
+`aggregate_node` filters `proposed_mutations` - `vetoed_mutations`, calls `upsert_strategy` for survivors, returns `{"mutations": [accepted_records]}` → merged into main `mutations` reducer.
 
 ---
 
@@ -791,17 +788,26 @@ collapse. Gate 5 catches this.
 
 ### Where experiments rows go
 
-After `ratchet_node` completes, the `experiments` table has 5 rows:
+The `experiments` table receives two types of rows:
 
+**Critic-veto rows** (written by `critic_node` before backtest):
 ```sql
-SELECT mutator, accepted, delta_sharpe, reasoning FROM experiments WHERE run_id='a3f9d2c1';
+mutator="critic_veto", child_strategy_id=NULL, accepted=0
+```
+These have `child_strategy_id=NULL` because the child was never registered — the critic rejected it before `aggregate_node` called `upsert_strategy`.
 
-mutator       accepted  delta_sharpe  reasoning
-param_delta   1         0.06          accepted
-param_delta   0         0.00          sharpe_delta=0.000<0.05
-param_delta   0         0.03          sharpe_delta=0.030<0.05
-composition   0         0.07          symbol_regression=RELIANCE:-0.640<-0.5
-composition   1         0.09          accepted
+**Ratchet rows** (written by `ratchet_node` after backtest, gen≥1):
+```sql
+SELECT mutator, accepted, delta_sharpe, child_strategy_id, reasoning
+FROM experiments WHERE run_id='a3f9d2c1';
+
+mutator       accepted  delta_sharpe  child_strategy_id  reasoning
+critic_veto   0         NULL          NULL               already tried direction
+critic_veto   0         NULL          NULL               lineage exhausted
+param_delta   1         0.06          14                 accepted
+param_delta   0         0.00          15                 sharpe_delta=0.000<0.05
+composition   0         0.07          17                 symbol_regression=RELIANCE:-0.640<-0.5
+composition   1         0.09          18                 accepted
 ```
 
 View these with: `uv run python main.py experiments --run a3f9d2c1`

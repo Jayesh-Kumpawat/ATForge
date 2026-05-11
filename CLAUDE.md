@@ -42,11 +42,16 @@ uv run python main.py pipeline --symbols RELIANCE \
 
 ## Architecture
 
-**Phase 2a pipeline** (fan-out loop via LangGraph Send API):
+**A2 pipeline** (fan-out loop via LangGraph Send API):
 ```
 START → load_universe → fetch_data → detect_patterns
   → [Send×N] run_backtest_one   ← parallel per signal
-  → rank → mutate_strategies → ratchet_node
+  → ratchet_node  (no-op gen=0, scores gen≥1)
+  → rank
+  → explorer_node   (propose novel mutations, high-temp ResearchAgentMutator)
+  → exploiter_node  (refine top performers, low-temp ResearchAgentMutator)
+  → critic_node     (hard-veto via ReAct loop, logs critic_veto to experiments)
+  → aggregate_node  (filter vetoed, upsert survivors → mutations reducer)
   → loop_decision
       continue → advance_generation → detect_patterns  (loop)
       stop     → END
@@ -89,7 +94,8 @@ START → load_universe → fetch_data → detect_patterns
 - Shift entry signals by 1 bar in vectorbt backtests — no lookahead guard built in
 - On backtest failure, return `success=False` — never raise from worker nodes
 - `params_json` in `strategies` table must use `json.dumps(..., sort_keys=True)` — UNIQUE dedup depends on stable key ordering
-- `detector_configs` in state is last-writer-wins (NOT a reducer). `mutations` IS a reducer (`operator.add`)
+- `detector_configs` in state is last-writer-wins (NOT a reducer). `mutations`, `proposed_mutations`, `vetoed_mutations` ARE reducers (`operator.add`)
+- critic_veto experiment rows have `child_strategy_id=NULL` (proposal rejected before backtest)
 
 ## Phase status
 - **Phase 1** ✅ complete — data + patterns + backtest + storage + ranking
@@ -98,7 +104,7 @@ START → load_universe → fetch_data → detect_patterns
 - **A2 Phase 6** ✅ complete — 4-node multi-agent topology: explorer/exploiter/critic/aggregate nodes, AgentRoleConfig, proposed_mutations + vetoed_mutations reducers (250 tests)
 - **A2 Phase 7** ✅ complete — critic agent logic: ReAct loop per proposal, vetoes logged mutator='critic_veto', EvtCriticVerdict, llm_router on PipelineDeps (276 tests)
 - **A2 Phase 8** ✅ complete — AgentRoleConfig(llm_priority, model), atforge.yaml, load_role_configs(), exploiter_node wired ResearchAgentMutator temp=0.4 (276 tests)
-- **A2 Phase 9** 🔄 next — Langfuse trace polish, Streamlit dashboard agent activity tab
+- **A2 Phase 9** ✅ complete — Langfuse trace tags, veto scoring, Agent Activity dashboard (289 tests)
 - **Phase 2b** deferred — OpenEvolve population dynamics, Qdrant similarity dedup, per-symbol ratchet, bootstrap significance
 - **Phase 3** deferred — HITL Telegram approval, paper trading, Kite broker integration
 

@@ -212,6 +212,11 @@ erDiagram
 | `get_top_strategies_for_generation(conn, *, run_id, generation, limit)` | `list[dict]` | Top-N parents for mutators — AVG metrics per strategy |
 | `get_experiments_for_run(conn, run_id)` | `list[dict]` | All ratchet verdicts with strategy names (JOIN strategies) |
 | `get_best_sharpe_per_generation(conn, run_id)` | `list[dict]` | MAX(sharpe) per generation — powers dashboard progression chart |
+| `get_strategy_children(conn, strategy_id, run_id=None)` | `list[dict]` | All child strategies mutated from a given parent |
+| `get_pattern_symbol_breakdown(conn, run_id=None, limit=20)` | `list[dict]` | Signal counts grouped by pattern family and symbol |
+| `get_mutation_tree(conn, run_id)` | `list[dict]` | Full parent→child mutation graph for a run (A1 agent tool) |
+| `get_agent_activity_summary(conn, run_id=None)` | `dict` | Explorer/exploiter/critic proposal + veto counts — powers Agent Activity tab |
+| `get_recent_critic_verdicts(conn, run_id=None, limit=50)` | `list[dict]` | Recent critic decisions with verdict and reasoning |
 
 ### `top_rankings` dedup logic
 

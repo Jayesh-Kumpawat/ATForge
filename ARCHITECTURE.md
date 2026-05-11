@@ -537,6 +537,8 @@ Downloads daily OHLCV data for NSE Nifty 50 stocks, detects chart patterns progr
 |---|---|---|
 | 1 — Foundation | **Complete** | Data → Detect → Backtest → Rank → Dashboard |
 | 2a — Evolution Loop | **Complete** | LLM mutation + Send fan-out + ratchet + multi-gen loop |
+| A1 — Research Agent | **Complete** | ReAct loop + tool calling + ResearchAgentMutator |
+| A2 — Multi-Agent | **Complete** | Explorer/exploiter/critic/aggregate topology + Langfuse trace tags (289 tests) |
 | 2b — Evolution Scale | Deferred | OpenEvolve population + Qdrant dedup + bootstrap significance |
 | 3 — HITL & Execution | Planned | Telegram approval + paper trading + Kite broker |
 | 4 — Scale | Planned | Multi-strategy portfolio + regime-aware selection |
@@ -1206,7 +1208,9 @@ ATForge/
 
 ---
 
-## Phase 2a — Evolution Loop (complete)
+## A2 — Multi-Agent Evolution Loop (complete)
+
+Replaces `mutate_strategies` from Phase 2a with four specialized agent nodes: explorer, exploiter, critic, aggregate.
 
 ### Pipeline topology
 
@@ -1216,16 +1220,19 @@ START
   → fetch_data
   → detect_patterns      uses state["detector_configs"] via build_detector_from_config()
   → [Send×N] run_backtest_one    parallel worker per signal_ref
-  → rank
-  → mutate_strategies    proposes child strategies via LLM mutators
-  → ratchet_node         compares child vs parent, writes experiments rows
+  → ratchet_node         no-op on gen=0; judge_mutation() comparison on gen≥1
+  → rank                 top_rankings() from SQLite
+  → explorer_node        ResearchAgentMutator (high-temp) — propose novel mutations
+  → exploiter_node       ResearchAgentMutator (low-temp) — refine top performers
+  → critic_node          ReAct loop per proposal — hard-veto; logs critic_veto rows
+  → aggregate_node       filter vetoed, upsert survivors → mutations reducer
   → loop_decision ──── "continue" → advance_generation → detect_patterns
                 └────── "stop"    → END
 ```
 
-`loop_decision` returns `"continue"` if `generation + 1 < max_generations`, else `"stop"`. Default `max_generations=1` = single pass identical to Phase 1.
+`loop_decision` returns `"continue"` if `generation + 1 < max_generations`, else `"stop"`. Default `max_generations=1` = single pass (baseline only — A2 nodes run but emit no proposals since no top parents exist).
 
-### PipelineState — Phase 2a fields
+### PipelineState — A2 fields
 
 | Field | Type | Merge strategy | Description |
 |---|---|---|---|
@@ -1239,17 +1246,23 @@ START
 | `signal_refs` | `Annotated[list, operator.add]` | **reducer** | accumulated per (symbol, detector) |
 | `backtest_ids` | `Annotated[list, operator.add]` | **reducer** | DB rowids from run_backtest_one workers |
 | `failures` | `Annotated[list, operator.add]` | **reducer** | delta-only failure dicts |
-| `mutations` | `Annotated[list, operator.add]` | **reducer** | proposed child mutations, all generations |
+| `mutations` | `Annotated[list, operator.add]` | **reducer** | accepted mutations written by aggregate_node |
+| `proposed_mutations` | `Annotated[list, operator.add]` | **reducer** | explorer + exploiter proposals (A2) |
+| `vetoed_mutations` | `Annotated[list, operator.add]` | **reducer** | critic-vetoed configs (A2) |
 
 Reducer fields: each node returns only its NEW items. LangGraph merges via `operator.add`. `detector_configs` is last-writer-wins — `advance_generation` overwrites it each loop.
 
-### PipelineDeps — Phase 2a additions
+### PipelineDeps — A2 additions
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `mutators` | `tuple[Mutator, ...]` | `()` | `ParamDeltaMutator`, `CompositionMutator` |
 | `ratchet_thresholds` | `RatchetThresholds` | see below | ratchet acceptance config |
 | `top_n_parents` | `int` | `5` | how many parents to mutate per generation |
+| `tracing_enabled` | `bool` | `False` | enables Langfuse node + completion traces |
+| `event_bus` | `EventBus \| None` | `None` | live event stream to dashboard monitor thread |
+| `role_configs` | `dict[str, AgentRoleConfig]` | `{}` | per-role config loaded from `atforge.yaml` |
+| `llm_router` | `Callable \| None` | `None` | `complete_with_fallback` injected by CLI |
 
 `RatchetThresholds` defaults: `min_delta_sharpe=0.05`, `min_delta_sortino=0.02`, `max_dd_ratio=1.10`, `min_n_trades=5`.
 

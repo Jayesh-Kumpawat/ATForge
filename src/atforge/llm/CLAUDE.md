@@ -1,6 +1,6 @@
 # LLM Client — `src/atforge/llm/`
 
-## Phase 2a status: COMPLETE
+## Status: A1 + A2 Complete
 
 This module implements the full LLM provider stack for strategy evolution. All calls
 go through `complete_with_fallback` which chains providers, retries transiently, and
@@ -46,12 +46,42 @@ response = complete_with_fallback(
 print(response.text)
 ```
 
+## Tool calling (A1 addition)
+
+Multi-turn tool calling is supported for providers with `supports_tools=True` (currently Gemini only).
+
+```python
+# New types in types.py
+@dataclass(frozen=True, slots=True)
+class ToolSpec:
+    name: str
+    description: str
+    parameters_schema: dict[str, Any]  # JSON Schema of tool arguments
+
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+@dataclass(frozen=True, slots=True)
+class Message:
+    role: Literal["user", "assistant", "tool"]
+    content: str | None = None
+    tool_calls: tuple[ToolCall, ...] | None = None
+    tool_call_id: str | None = None  # set when role=="tool"
+```
+
+Router filter: when `LlmRequest.tools` is set, `complete_with_fallback` skips providers where `supports_tools=False`. All non-Gemini providers have `supports_tools=False`.
+
+Used by: `ResearchAgentMutator` / `run_react_loop` in `evolution/agent_runner.py`.
+
 ## LlmRequest fields
 
 ```python
 @dataclass(frozen=True, slots=True)
 class LlmRequest:
-    prompt: str
+    prompt: str = ""
     model: str | None = None          # None = provider's default_model
     system: str | None = None
     temperature: float = 0.7
@@ -59,6 +89,19 @@ class LlmRequest:
     trace_name: str | None = None     # Langfuse span name
     metadata: dict | None = None
     response_schema: type | None = None  # reserved for JSON-mode (provider-specific)
+    tools: tuple[ToolSpec, ...] | None = None     # multi-turn tool calling (A1)
+    messages: tuple[Message, ...] | None = None   # multi-turn conversation history (A1)
+```
+
+LlmResponse additions (A1):
+```python
+tool_calls: tuple[ToolCall, ...] | None = None  # present when stop_reason=="tool_use"
+stop_reason: str | None = None  # "end_turn" | "tool_use" | "max_tokens"
+```
+
+LlmProvider Protocol (A1 addition):
+```python
+supports_tools: bool  # True only for providers wired with function-calling support
 ```
 
 ## Error handling
@@ -90,6 +133,34 @@ with client.start_as_current_observation(name="span_name", as_type="generation",
 Keys are set in `.env` as `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST`.
 The `tracing.py::trace_completion` context manager handles this exactly. Pass
 `tracing_enabled=True` to `complete_with_fallback` to activate.
+
+### `trace_node` (A2 Phase 9 addition)
+
+Wraps a full pipeline node in a Langfuse span. Accepts `tags` for per-role filtering in the Langfuse UI:
+
+```python
+with trace_node("critic_node", enabled=deps.tracing_enabled,
+                metadata={"gen": state["generation"]},
+                tags=["critic", "a2"]):
+    ...node logic...
+```
+
+Signature: `trace_node(node_name, *, enabled=False, client=None, metadata=None, tags=None)`
+
+### `score_current_observation` (A2 Phase 9 addition)
+
+Score the currently active Langfuse observation. No-op when `enabled=False`. Must be called inside an active `trace_node` or `trace_completion` context:
+
+```python
+score_current_observation(
+    "veto_rate",
+    vetoed / total,
+    enabled=deps.tracing_enabled,
+    comment=f"{vetoed}/{total} proposals vetoed",
+)
+```
+
+Signature: `score_current_observation(name, value, *, enabled=False, client=None, comment=None)`
 
 ## Adding a new provider
 
