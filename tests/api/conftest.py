@@ -20,8 +20,9 @@ def db_path(tmp_path: Path) -> str:
 
 
 @pytest.fixture
-def client(db_path: str):
+def client(db_path: str, monkeypatch):
     """FastAPI TestClient with DB dep overridden to use test db_path."""
+    monkeypatch.setenv("ATFORGE_DB_PATH", db_path)
     app = create_app()
 
     def _override_get_db():

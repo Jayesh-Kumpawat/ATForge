@@ -5,8 +5,10 @@ import sqlite3
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
-from atforge.api.deps import get_db
+from atforge.api.deps import _resolve_db_path, get_db
+from atforge.api.events.stream import event_stream
 from atforge.api.schemas.common import ErrorDetail
 from atforge.api.schemas.runs import RunListResponse, RunSummary
 
@@ -126,3 +128,15 @@ def get_run(run_id: str, db: sqlite3.Connection = Depends(get_db)) -> RunSummary
         n_failures=_count_failures(db, run_id),
         current_generation=_current_generation(db, run_id),
     )
+
+
+@router.get("/{run_id}/events")
+async def stream_events(run_id: str, after_event_id: int = 0) -> StreamingResponse:
+    """SSE stream of pipeline_events for one run."""
+    db_path = _resolve_db_path()
+
+    async def _generator():
+        async for chunk in event_stream(db_path, run_id, after_event_id):
+            yield chunk
+
+    return StreamingResponse(_generator(), media_type="text/event-stream")
