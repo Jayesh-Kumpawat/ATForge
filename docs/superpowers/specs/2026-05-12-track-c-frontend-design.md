@@ -816,3 +816,28 @@ End of Track C MVP, Sonnet should be able to demonstrate:
 ---
 
 *Design owner: Claude (Opus 4.7). Implementation owner: Sonnet (4.6 or higher), fresh session. Approved by user 2026-05-12.*
+
+---
+
+## C5 Spike Findings (2026-05-13)
+
+**Decision: R1 fallback taken** — persist equity + signals at backtest time.
+
+### engine.py analysis
+- `run_backtest()` — zero side effects: no DB writes, no file I/O, pure compute
+- `portfolio_for_debug()` — returns raw `vbt.Portfolio`, safe escape hatch
+- `vbt.Portfolio.value()` → `pd.Series` (portfolio equity over time)
+- `vbt.Portfolio.drawdown()` → `pd.Series` (drawdown fraction over time)
+- `portfolio.trades.records_readable` → DataFrame with entry/exit info per trade
+
+### Why pure-read recompute was rejected
+- `pattern_signals` table stores only metadata (`n_signals`, `first_date`, `last_date`) — **signal boolean series not persisted**
+- Recompute would require: re-fetch OHLCV + re-run pattern detection + re-run backtest
+- API layer would need to import `patterns/` + detector registry — breaks "API is deletable" invariant
+- Cache is exact-range-match only; stale if date range changes
+
+### R1 implementation (Tasks 15+16)
+1. Migration `0004_equity_signals.sql`: add `equity_json TEXT`, `signals_json TEXT` to `backtest_runs`
+2. `engine.py`: `BacktestResult` gains optional `equity_json` + `signals_json` fields; extraction helpers added
+3. `repo.py` `insert_backtest_result`: stores JSON columns
+4. API routes read from DB; return `SIGNAL_DATA_MISSING` 404 if columns are NULL (old runs)
