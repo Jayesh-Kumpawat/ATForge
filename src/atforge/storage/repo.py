@@ -96,8 +96,9 @@ def insert_backtest_result(
             total_return, final_value, max_drawdown,
             sharpe, sortino, cagr, win_rate,
             hold_bars, fees, slippage, init_cash,
-            generation, created_at
-        ) VALUES (?,?,?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?, ?,?)
+            generation, created_at,
+            equity_json, signals_json
+        ) VALUES (?,?,?,?,?,?,?, ?,?,?, ?,?,?,?, ?,?,?,?, ?,?, ?,?)
         """,
         (
             run_id,
@@ -120,6 +121,8 @@ def insert_backtest_result(
             str(init_cash),
             generation,
             _now_iso(),
+            result.equity_json if result.success else None,
+            result.signals_json if result.success else None,
         ),
     )
     return int(cur.lastrowid)

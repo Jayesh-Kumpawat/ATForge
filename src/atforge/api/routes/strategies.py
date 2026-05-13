@@ -13,6 +13,8 @@ from atforge.api.schemas.common import ErrorDetail
 from atforge.api.schemas.strategies import (
     BacktestListResponse,
     BacktestRow,
+    EquityPoint,
+    EquityResponse,
     LineageNode,
     LineageResponse,
     MetricsSummary,
@@ -307,3 +309,48 @@ def get_reasoning(strategy_id: int, db: sqlite3.Connection = Depends(get_db)) ->
         for row in rows
     ]
     return ReasoningResponse(strategy_id=strategy_id, entries=entries)
+
+
+@router.get("/{strategy_id}/equity", response_model=EquityResponse)
+def get_equity(
+    strategy_id: int,
+    symbol: str = Query(...),
+    run_id: str = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+) -> EquityResponse:
+    exists = db.execute("SELECT 1 FROM strategies WHERE strategy_id = ?", (strategy_id,)).fetchone()
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ErrorDetail(code="STRATEGY_NOT_FOUND", message=f"strategy_id={strategy_id}").model_dump()},
+        )
+
+    row = db.execute(
+        """
+        SELECT equity_json, init_cash FROM backtest_runs
+        WHERE strategy_id = ? AND symbol = ? AND run_id = ? AND success = 1
+          AND equity_json IS NOT NULL
+        ORDER BY backtest_id DESC LIMIT 1
+        """,
+        (strategy_id, symbol, run_id),
+    ).fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ErrorDetail(
+                code="SIGNAL_DATA_MISSING",
+                message=f"No equity data for strategy={strategy_id} symbol={symbol} run={run_id}",
+            ).model_dump()},
+        )
+
+    points_raw: list[dict] = json.loads(row["equity_json"])
+    points = [EquityPoint(t=p["t"], equity=p["equity"], drawdown=p["drawdown"]) for p in points_raw]
+    init_cap = float(row["init_cash"]) if row["init_cash"] else 100000.0
+    return EquityResponse(
+        strategy_id=strategy_id,
+        symbol=symbol,
+        run_id=run_id,
+        initial_capital=init_cap,
+        points=points,
+    )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -24,6 +25,30 @@ class BacktestResult:
     metrics: dict[str, Decimal | int | float] = field(default_factory=dict)
     n_trades: int = 0
     reason: str | None = None
+    equity_json: str | None = None    # JSON array of {t, equity, drawdown} points
+    signals_json: str | None = None   # JSON array of {t, type, price} markers
+
+
+def _extract_equity_json(portfolio: Any, ohlcv: pd.DataFrame) -> str:
+    value = portfolio.value()
+    dd = portfolio.drawdown()
+    return json.dumps([
+        {"t": int(ts.timestamp() * 1000), "equity": round(float(v), 4), "drawdown": round(float(d), 6)}
+        for ts, v, d in zip(value.index, value, dd)
+    ])
+
+
+def _extract_signals_json(entries: pd.Series, exits: pd.Series, ohlcv: pd.DataFrame) -> str:
+    close = ohlcv["close"]
+    markers: list[dict[str, Any]] = []
+    for ts in entries.index[entries]:
+        if ts in close.index:
+            markers.append({"t": int(ts.timestamp() * 1000), "type": "entry", "price": float(close[ts])})
+    for ts in exits.index[exits]:
+        if ts in close.index:
+            markers.append({"t": int(ts.timestamp() * 1000), "type": "exit", "price": float(close[ts])})
+    markers.sort(key=lambda x: x["t"])
+    return json.dumps(markers)
 
 
 def _bool_to_entry_exit(signal: pd.Series, hold_bars: int) -> tuple[pd.Series, pd.Series]:
@@ -76,12 +101,21 @@ def run_backtest(
         trades = portfolio.trades.records_readable
         n_trades = len(trades)
 
+        try:
+            equity_json = _extract_equity_json(portfolio, ohlcv)
+            signals_json = _extract_signals_json(entries, exits, ohlcv)
+        except Exception:
+            equity_json = None
+            signals_json = None
+
         return BacktestResult(
             success=True,
             pattern_name=pattern_name,
             symbol=symbol,
             metrics=metrics,
             n_trades=n_trades,
+            equity_json=equity_json,
+            signals_json=signals_json,
         )
     except Exception as exc:
         log.warning(
