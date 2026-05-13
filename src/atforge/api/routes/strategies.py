@@ -171,3 +171,139 @@ def get_strategy(strategy_id: int, db: sqlite3.Connection = Depends(get_db)) -> 
         created_at=None,
         metrics_summary=_strategy_metrics(db, strategy_id),
     )
+
+
+@router.get("/{strategy_id}/backtests", response_model=BacktestListResponse)
+def list_backtests(strategy_id: int, db: sqlite3.Connection = Depends(get_db)) -> BacktestListResponse:
+    exists = db.execute("SELECT 1 FROM strategies WHERE strategy_id = ?", (strategy_id,)).fetchone()
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ErrorDetail(code="STRATEGY_NOT_FOUND", message=f"strategy_id={strategy_id}").model_dump()},
+        )
+
+    rows = db.execute(
+        """
+        SELECT run_id, symbol, generation, n_trades, sharpe, sortino,
+               win_rate, max_drawdown, cagr
+        FROM backtest_runs
+        WHERE strategy_id = ? AND success = 1
+        ORDER BY sharpe DESC NULLS LAST
+        LIMIT 100
+        """,
+        (strategy_id,),
+    ).fetchall()
+
+    items = [
+        BacktestRow(
+            run_id=row["run_id"],
+            symbol=row["symbol"],
+            generation=int(row["generation"] or 0),
+            n_trades=int(row["n_trades"] or 0),
+            sharpe=row["sharpe"],
+            sortino=row["sortino"],
+            win_rate=float(row["win_rate"]) if row["win_rate"] is not None else None,
+            max_drawdown=float(row["max_drawdown"]) if row["max_drawdown"] is not None else None,
+            cagr=row["cagr"],
+        )
+        for row in rows
+    ]
+    return BacktestListResponse(strategy_id=strategy_id, backtests=items)
+
+
+def _build_lineage_node(db: sqlite3.Connection, strategy_id: int) -> LineageNode:
+    row = db.execute(
+        "SELECT name FROM strategies WHERE strategy_id = ?",
+        (strategy_id,),
+    ).fetchone()
+    name = row["name"] if row else f"#{strategy_id}"
+
+    exp = db.execute(
+        """
+        SELECT mutator, accepted FROM experiments
+        WHERE child_strategy_id = ?
+        ORDER BY experiment_id DESC LIMIT 1
+        """,
+        (strategy_id,),
+    ).fetchone()
+
+    sharpe_row = db.execute(
+        "SELECT MAX(sharpe) FROM backtest_runs WHERE strategy_id = ?", (strategy_id,)
+    ).fetchone()
+
+    return LineageNode(
+        strategy_id=strategy_id,
+        name=name,
+        generation=_strategy_generation(db, strategy_id),
+        mutator=exp["mutator"] if exp else None,
+        accepted=bool(exp["accepted"]) if exp and exp["accepted"] is not None else None,
+        sharpe=sharpe_row[0] if sharpe_row else None,
+    )
+
+
+@router.get("/{strategy_id}/lineage", response_model=LineageResponse)
+def get_lineage(strategy_id: int, db: sqlite3.Connection = Depends(get_db)) -> LineageResponse:
+    exists = db.execute("SELECT 1 FROM strategies WHERE strategy_id = ?", (strategy_id,)).fetchone()
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ErrorDetail(code="STRATEGY_NOT_FOUND", message=f"strategy_id={strategy_id}").model_dump()},
+        )
+
+    ancestors: list[LineageNode] = []
+    current = strategy_id
+    seen: set[int] = set()
+    while True:
+        parent = _strategy_parent(db, current)
+        if parent is None or parent in seen:
+            break
+        seen.add(parent)
+        ancestors.append(_build_lineage_node(db, parent))
+        current = parent
+    ancestors.reverse()
+
+    desc_rows = db.execute(
+        """
+        SELECT DISTINCT child_strategy_id FROM experiments
+        WHERE parent_strategy_id = ? AND child_strategy_id IS NOT NULL
+        """,
+        (strategy_id,),
+    ).fetchall()
+    descendants = [_build_lineage_node(db, int(r[0])) for r in desc_rows]
+
+    return LineageResponse(strategy_id=strategy_id, ancestors=ancestors, descendants=descendants)
+
+
+@router.get("/{strategy_id}/reasoning", response_model=ReasoningResponse)
+def get_reasoning(strategy_id: int, db: sqlite3.Connection = Depends(get_db)) -> ReasoningResponse:
+    exists = db.execute("SELECT 1 FROM strategies WHERE strategy_id = ?", (strategy_id,)).fetchone()
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ErrorDetail(code="STRATEGY_NOT_FOUND", message=f"strategy_id={strategy_id}").model_dump()},
+        )
+
+    rows = db.execute(
+        """
+        SELECT run_id, generation, mutator, parent_strategy_id, accepted, delta_sharpe, reasoning
+        FROM experiments
+        WHERE child_strategy_id = ? AND reasoning IS NOT NULL AND reasoning != ''
+        ORDER BY experiment_id DESC
+        LIMIT 50
+        """,
+        (strategy_id,),
+    ).fetchall()
+
+    entries = [
+        ReasoningEntry(
+            run_id=row["run_id"],
+            generation=int(row["generation"]),
+            mutator=row["mutator"],
+            parent_strategy_id=int(row["parent_strategy_id"]) if row["parent_strategy_id"] is not None else None,
+            reasoning=row["reasoning"],
+            accepted=bool(row["accepted"]),
+            delta_sharpe=row["delta_sharpe"],
+        )
+        for row in rows
+    ]
+    return ReasoningResponse(strategy_id=strategy_id, entries=entries)
