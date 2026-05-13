@@ -18,8 +18,11 @@ from atforge.api.schemas.strategies import (
     LineageNode,
     LineageResponse,
     MetricsSummary,
+    OHLCVBar,
     ReasoningEntry,
     ReasoningResponse,
+    SignalMarker,
+    SignalsResponse,
     StrategyDetail,
     StrategyListItem,
     StrategyListResponse,
@@ -353,4 +356,72 @@ def get_equity(
         run_id=run_id,
         initial_capital=init_cap,
         points=points,
+    )
+
+
+@router.get("/{strategy_id}/signals", response_model=SignalsResponse)
+def get_signals(
+    strategy_id: int,
+    symbol: str = Query(...),
+    run_id: str = Query(...),
+    db: sqlite3.Connection = Depends(get_db),
+) -> SignalsResponse:
+    exists = db.execute("SELECT 1 FROM strategies WHERE strategy_id = ?", (strategy_id,)).fetchone()
+    if not exists:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ErrorDetail(code="STRATEGY_NOT_FOUND", message=f"strategy_id={strategy_id}").model_dump()},
+        )
+
+    row = db.execute(
+        """
+        SELECT signals_json FROM backtest_runs
+        WHERE strategy_id = ? AND symbol = ? AND run_id = ? AND success = 1
+          AND signals_json IS NOT NULL
+        ORDER BY backtest_id DESC LIMIT 1
+        """,
+        (strategy_id, symbol, run_id),
+    ).fetchone()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": ErrorDetail(
+                code="SIGNAL_DATA_MISSING",
+                message=f"No signal data for strategy={strategy_id} symbol={symbol} run={run_id}",
+            ).model_dump()},
+        )
+
+    markers_raw: list[dict] = json.loads(row["signals_json"])
+    markers = [SignalMarker(t=m["t"], type=m["type"], price=m["price"]) for m in markers_raw]
+
+    # OHLCV bars: try parquet cache; return empty list if unavailable (MVP acceptable).
+    bars: list[OHLCVBar] = []
+    try:
+        from pathlib import Path
+        import pandas as pd
+        candidates = list(Path("data/cache").rglob(f"*/{symbol}/**/*.parquet"))
+        if candidates:
+            latest = max(candidates, key=lambda p: p.stat().st_mtime)
+            ohlcv = pd.read_parquet(latest)
+            bars = [
+                OHLCVBar(
+                    t=int(idx.timestamp() * 1000),
+                    o=float(row_["open"]),
+                    h=float(row_["high"]),
+                    l=float(row_["low"]),
+                    c=float(row_["close"]),
+                    v=float(row_["volume"]) if "volume" in ohlcv.columns else 0.0,
+                )
+                for idx, row_ in ohlcv.iterrows()
+            ]
+    except Exception:
+        bars = []
+
+    return SignalsResponse(
+        strategy_id=strategy_id,
+        symbol=symbol,
+        run_id=run_id,
+        bars=bars,
+        signals=markers,
     )
