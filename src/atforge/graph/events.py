@@ -7,6 +7,7 @@ EventBus is optional — nodes check `deps.event_bus is not None` before emittin
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from queue import Empty, Queue
 
@@ -113,11 +114,23 @@ _SENTINEL = None
 class EventBus:
     """Thread-safe queue bridging pipeline nodes to the monitor thread."""
 
-    def __init__(self) -> None:
+    def __init__(self, db_path: str | None = None) -> None:
         self._q: Queue[PipelineEvent | None] = Queue()
+        self._db_path = db_path
 
-    def emit(self, event: PipelineEvent) -> None:
+    def emit(self, event: PipelineEvent, *, generation: int | None = None) -> None:
         self._q.put(event)
+        if self._db_path is not None:
+            try:
+                from atforge.api.events.persistence import persist_event  # local to avoid circular
+                conn = sqlite3.connect(self._db_path)
+                try:
+                    persist_event(conn, event, generation=generation)
+                finally:
+                    conn.close()
+            except Exception:
+                # Never let persistence failure crash the pipeline.
+                pass
 
     def drain(self, timeout: float = 0.05) -> list[PipelineEvent]:
         """Return all currently queued events without blocking longer than `timeout`."""
