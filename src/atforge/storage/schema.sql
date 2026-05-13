@@ -102,3 +102,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS strategy_search USING fts5(
 );
 
 PRAGMA user_version = 2;
+
+-- A2 Track C: durable event log for cross-process SSE bridge
+CREATE TABLE IF NOT EXISTS pipeline_events (
+    event_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     TEXT NOT NULL,
+    generation INTEGER,
+    ts_ms      INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_run
+    ON pipeline_events (run_id, event_id);
