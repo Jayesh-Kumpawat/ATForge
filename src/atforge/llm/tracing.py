@@ -105,14 +105,15 @@ def trace_node(
         "as_type": "span",
         "metadata": metadata or {},
     }
-    if tags is not None:
-        obs_kwargs["tags"] = tags
 
     with client.start_as_current_observation(**obs_kwargs) as obs:
         yield
-        obs.update(
-            metadata={**(metadata or {}), "elapsed_ms": round((time.monotonic() - t0) * 1000)}
-        )
+        update_kwargs: dict[str, Any] = {
+            "metadata": {**(metadata or {}), "elapsed_ms": round((time.monotonic() - t0) * 1000)}
+        }
+        if tags is not None:
+            update_kwargs["tags"] = tags
+        obs.update(**update_kwargs)
 
 
 def score_current_observation(

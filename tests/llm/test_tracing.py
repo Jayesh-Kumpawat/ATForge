@@ -101,7 +101,7 @@ def _make_fake_client() -> tuple[dict, object]:
 
 
 def test_trace_node_passes_tags_to_langfuse_client() -> None:
-    """tags list forwarded to start_as_current_observation when trace_node enabled."""
+    """tags list forwarded to obs.update (not start_as_current_observation — Langfuse 4.x rejects it there)."""
     from atforge.llm.tracing import trace_node
 
     calls, client = _make_fake_client()
@@ -109,11 +109,13 @@ def test_trace_node_passes_tags_to_langfuse_client() -> None:
         pass
 
     assert len(calls["start"]) == 1
-    assert calls["start"][0].get("tags") == ["critic", "phase9"]
+    assert "tags" not in calls["start"][0]
+    assert len(calls["update"]) == 1
+    assert calls["update"][0].get("tags") == ["critic", "phase9"]
 
 
 def test_trace_node_without_tags_omits_tags_key() -> None:
-    """When tags=None (default), 'tags' key not forwarded to Langfuse."""
+    """When tags=None (default), 'tags' key absent from both start and update."""
     from atforge.llm.tracing import trace_node
 
     calls, client = _make_fake_client()
@@ -122,6 +124,8 @@ def test_trace_node_without_tags_omits_tags_key() -> None:
 
     assert len(calls["start"]) == 1
     assert "tags" not in calls["start"][0]
+    assert len(calls["update"]) == 1
+    assert "tags" not in calls["update"][0]
 
 
 def test_trace_node_disabled_tags_never_reach_client() -> None:
