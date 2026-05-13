@@ -94,7 +94,7 @@ def _make_fake_client() -> tuple[dict, object]:
             calls["start"].append(kwargs)
             return _FakeObservation()
 
-        def score_current_observation(self, **kwargs):
+        def score_current_span(self, **kwargs):
             calls["score"].append(kwargs)
 
     return calls, _FakeLangfuseClient()

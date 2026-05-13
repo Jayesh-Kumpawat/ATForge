@@ -140,4 +140,4 @@ def score_current_observation(
     if comment is not None:
         kwargs["comment"] = comment
 
-    client.score_current_observation(**kwargs)
+    client.score_current_span(**kwargs)
