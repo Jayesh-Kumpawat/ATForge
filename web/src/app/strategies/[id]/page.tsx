@@ -5,6 +5,9 @@ import { PriceSignalChart } from "./_components/PriceSignalChart";
 import { EquityCurveCard } from "./_components/EquityCurveCard";
 import { DrawdownCard } from "./_components/DrawdownCard";
 import { BacktestPerSymbolTable } from "./_components/BacktestPerSymbolTable";
+import { LineageTree } from "./_components/LineageTree";
+import { ReasoningCard } from "./_components/ReasoningCard";
+import { ExperimentHistoryTable } from "./_components/ExperimentHistoryTable";
 
 export default function StrategyDetailPage({ params }: { params: { id: string } }) {
   const id = Number(params.id);
@@ -19,6 +22,12 @@ export default function StrategyDetailPage({ params }: { params: { id: string } 
         <DrawdownCard id={id} />
       </div>
       <BacktestPerSymbolTable id={id} />
+      <LineageTree id={id} />
+      <ReasoningCard id={id} />
+      <div>
+        <h2 className="text-sm font-medium mb-2">Experiment History</h2>
+        <ExperimentHistoryTable id={id} />
+      </div>
     </div>
   );
 }
