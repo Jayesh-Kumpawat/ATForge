@@ -111,7 +111,8 @@ def pipeline(
 
     effective_max_gen = 1 if dry_run else max_generations
     tracing_enabled = bool(settings.langfuse_public_key and settings.langfuse_secret_key)
-    bus = EventBus() if live else None
+    # Always create EventBus with db_path so events persist regardless of --live.
+    bus = EventBus(db_path=str(settings.db_path))
 
     role_configs = load_role_configs()  # auto-discovers atforge.yaml in cwd
 
@@ -138,12 +139,14 @@ def pipeline(
     )
     graph = build_pipeline(deps)
     run_id = uuid4().hex[:12]
+    bus.set_run_id(run_id)
+
+    bus.emit(
+        EvtPipelineStart(run_id=run_id, n_symbols=len(syms), max_generations=effective_max_gen)
+    )
 
     monitor: PipelineMonitor | None = None
-    if bus is not None:
-        bus.emit(
-            EvtPipelineStart(run_id=run_id, n_symbols=len(syms), max_generations=effective_max_gen)
-        )
+    if live:
         monitor = PipelineMonitor(bus, run_id=run_id, max_generations=effective_max_gen)
         monitor.start()
     else:
@@ -165,8 +168,7 @@ def pipeline(
     n_backtests = len(result.get("backtest_ids", []))
     n_failures = len(result.get("failures", []))
 
-    if bus is not None:
-        bus.emit(EvtPipelineDone(run_id=run_id, n_backtests=n_backtests, n_failures=n_failures))
+    bus.emit(EvtPipelineDone(run_id=run_id, n_backtests=n_backtests, n_failures=n_failures))
     if monitor is not None:
         monitor.stop()
 

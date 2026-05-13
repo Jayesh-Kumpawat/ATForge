@@ -6,7 +6,7 @@ from pathlib import Path
 from atforge.storage.db import connect, init_db
 from atforge.storage.migrate import apply_migrations
 
-PHASE2A_TARGET_VERSION = 2
+PHASE2A_TARGET_VERSION = 3
 
 PHASE1_DDL = """
 CREATE TABLE runs (

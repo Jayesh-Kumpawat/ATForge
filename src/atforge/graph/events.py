@@ -117,6 +117,11 @@ class EventBus:
     def __init__(self, db_path: str | None = None) -> None:
         self._q: Queue[PipelineEvent | None] = Queue()
         self._db_path = db_path
+        self._run_id: str | None = None
+
+    def set_run_id(self, run_id: str) -> None:
+        """Bind the active run_id so all subsequent emits are tagged correctly."""
+        self._run_id = run_id
 
     def emit(self, event: PipelineEvent, *, generation: int | None = None) -> None:
         self._q.put(event)
@@ -125,7 +130,7 @@ class EventBus:
                 from atforge.api.events.persistence import persist_event  # local to avoid circular
                 conn = sqlite3.connect(self._db_path)
                 try:
-                    persist_event(conn, event, generation=generation)
+                    persist_event(conn, event, generation=generation, run_id=self._run_id)
                 finally:
                     conn.close()
             except Exception:
