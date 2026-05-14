@@ -6,7 +6,7 @@ import { QueryProvider } from "@/components/QueryProvider";
 import { Shell } from "@/components/Shell";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 
-const inter = Inter({ subsets: ["latin"] });
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
   title: "ATForge",
@@ -16,7 +16,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={inter.className}>
+      <body className={`${inter.variable} antialiased`}>
         <ErrorBoundary>
           <ThemeProvider>
             <QueryProvider>
