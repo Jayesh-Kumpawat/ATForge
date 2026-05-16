@@ -144,12 +144,12 @@ def top_rankings(
     # Without this, multi-generation runs show the same baseline strategy once per
     # generation it was tested in, cluttering the rankings with identical rows.
     sql = f"""
-        SELECT backtest_id, run_id, symbol, strategy_name, family,
+        SELECT backtest_id, run_id, symbol, strategy_id, strategy_name, family,
                generation, n_trades, total_return, final_value, max_drawdown,
                sharpe, sortino, cagr, win_rate
         FROM (
             SELECT
-                b.backtest_id, b.run_id, b.symbol,
+                b.backtest_id, b.run_id, b.symbol, b.strategy_id,
                 s.name AS strategy_name, s.family,
                 b.generation,
                 b.n_trades, b.total_return, b.final_value, b.max_drawdown,

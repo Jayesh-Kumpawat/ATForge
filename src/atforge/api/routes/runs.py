@@ -1,6 +1,7 @@
 """/runs endpoints — list + detail."""
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 
@@ -10,9 +11,35 @@ from fastapi.responses import StreamingResponse
 from atforge.api.deps import _resolve_db_path, get_db
 from atforge.api.events.stream import event_stream
 from atforge.api.schemas.common import ErrorDetail
-from atforge.api.schemas.runs import RunListResponse, RunSummary
+from atforge.api.schemas.runs import (
+    EventEnvelope,
+    ExperimentRow,
+    GenerationSharpe,
+    RankingRow,
+    RunEvolutionResponse,
+    RunListResponse,
+    RunRankingsResponse,
+    RunSummary,
+    TimelineResponse,
+)
+from atforge.storage.repo import (
+    get_best_sharpe_per_generation,
+    get_experiments_for_run,
+    top_rankings,
+)
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+
+def _ensure_run_exists(db: sqlite3.Connection, run_id: str) -> None:
+    row = db.execute("SELECT 1 FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": ErrorDetail(code="RUN_NOT_FOUND", message=f"run_id={run_id}").model_dump()
+            },
+        )
 
 
 def _parse_iso(s: str | None) -> datetime | None:
@@ -140,3 +167,52 @@ async def stream_events(run_id: str, after_event_id: int = 0) -> StreamingRespon
             yield chunk
 
     return StreamingResponse(_generator(), media_type="text/event-stream")
+
+
+@router.get("/{run_id}/rankings", response_model=RunRankingsResponse)
+def get_run_rankings(
+    run_id: str,
+    limit: int = Query(50, ge=1, le=200),
+    db: sqlite3.Connection = Depends(get_db),
+) -> RunRankingsResponse:
+    _ensure_run_exists(db, run_id)
+    rows = top_rankings(db, limit=limit, run_id=run_id)
+    return RunRankingsResponse(run_id=run_id, rankings=[RankingRow(**r) for r in rows])
+
+
+@router.get("/{run_id}/evolution", response_model=RunEvolutionResponse)
+def get_run_evolution(
+    run_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+) -> RunEvolutionResponse:
+    _ensure_run_exists(db, run_id)
+    experiments = [ExperimentRow(**e) for e in get_experiments_for_run(db, run_id)]
+    progression = [GenerationSharpe(**g) for g in get_best_sharpe_per_generation(db, run_id)]
+    return RunEvolutionResponse(
+        run_id=run_id, experiments=experiments, sharpe_progression=progression
+    )
+
+
+@router.get("/{run_id}/timeline", response_model=TimelineResponse)
+def get_run_timeline(
+    run_id: str,
+    db: sqlite3.Connection = Depends(get_db),
+) -> TimelineResponse:
+    _ensure_run_exists(db, run_id)
+    rows = db.execute(
+        "SELECT event_id, run_id, generation, ts_ms, event_type, payload "
+        "FROM pipeline_events WHERE run_id = ? ORDER BY event_id",
+        (run_id,),
+    ).fetchall()
+    events = [
+        EventEnvelope(
+            event_id=r["event_id"],
+            run_id=r["run_id"],
+            generation=r["generation"],
+            ts_ms=r["ts_ms"],
+            event_type=r["event_type"],
+            payload=json.loads(r["payload"]) if r["payload"] else {},
+        )
+        for r in rows
+    ]
+    return TimelineResponse(run_id=run_id, events=events)
