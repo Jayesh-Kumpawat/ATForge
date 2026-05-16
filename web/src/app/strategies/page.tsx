@@ -1,15 +1,15 @@
+"use client";
+
 import { Suspense } from "react";
-import { StrategyFilters } from "./_components/StrategyFilters";
-import { StrategyTable } from "./_components/StrategyTable";
+import { StrategiesContent } from "./_components/StrategiesContent";
 import { Loading } from "@/components/common/Loading";
 
-export default function StrategyLibraryPage() {
+export default function StrategiesPage() {
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="text-2xl font-semibold">Strategy Library</h1>
-      <Suspense fallback={<Loading />}>
-        <StrategyFilters />
-        <StrategyTable />
+      <h1 className="text-xl font-semibold">Strategies</h1>
+      <Suspense fallback={<Loading rows={6} />}>
+        <StrategiesContent />
       </Suspense>
     </div>
   );
