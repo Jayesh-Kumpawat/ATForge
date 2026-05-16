@@ -149,5 +149,64 @@ export interface components {
       bars: components["schemas"]["OHLCVBar"][];
       signals: components["schemas"]["SignalMarker"][];
     };
+    // stats
+    FamilyCount: { family: string; count: number };
+    StatsResponse: {
+      n_runs: number;
+      n_strategies: number;
+      n_backtests: number;
+      n_experiments: number;
+      best_sharpe: number | null;
+      families: components["schemas"]["FamilyCount"][];
+    };
+    // rankings / evolution / timeline
+    RankingRow: {
+      backtest_id: number;
+      symbol: string;
+      strategy_id: number;
+      strategy_name: string;
+      family: string;
+      generation: number;
+      n_trades: number;
+      sharpe: number | null;
+      sortino: number | null;
+      cagr: number | null;
+      win_rate: number | null;
+      max_drawdown: string | null;
+      total_return: string | null;
+    };
+    RunRankingsResponse: {
+      run_id: string;
+      rankings: components["schemas"]["RankingRow"][];
+    };
+    ExperimentRow: {
+      experiment_id: number;
+      generation: number;
+      mutator: string | null;
+      accepted: number | null;
+      delta_sharpe: number | null;
+      reasoning: string | null;
+      composite_score: string | null;
+      mutation_json: string | null;
+      created_at: string | null;
+      parent_name: string | null;
+      child_name: string | null;
+      parent_strategy_id: number | null;
+      child_strategy_id: number | null;
+    };
+    GenerationSharpe: {
+      generation: number;
+      best_sharpe: number | null;
+      n_backtests: number;
+    };
+    RunEvolutionResponse: {
+      run_id: string;
+      experiments: components["schemas"]["ExperimentRow"][];
+      sharpe_progression: components["schemas"]["GenerationSharpe"][];
+    };
+    TimelineResponse: {
+      run_id: string;
+      events: components["schemas"]["EventEnvelope"][];
+    };
   };
 }
