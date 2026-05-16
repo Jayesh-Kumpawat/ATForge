@@ -5,3 +5,4 @@ export { StatusPill, type RunStatus } from "./StatusPill";
 export { Chip } from "./Chip";
 export { ValueText } from "./ValueText";
 export { DataTable, type Column } from "./DataTable";
+export { Timeline } from "./Timeline";
