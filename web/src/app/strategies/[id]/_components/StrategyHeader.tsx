@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { fetchStrategy, strategiesQueryKeys } from "@/lib/api/strategies";
+import { Card, MetricTile } from "@/components/primitives";
 import { Loading } from "@/components/common/Loading";
-import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/common/EmptyState";
 
 export function StrategyHeader({ id }: { id: number }) {
   const { data, isLoading, error } = useQuery({
@@ -13,29 +14,46 @@ export function StrategyHeader({ id }: { id: number }) {
   });
 
   if (isLoading) return <Loading rows={2} />;
-  if (error || !data) return <div className="text-red-500">{(error as Error)?.message ?? "Strategy not found"}</div>;
+  if (error || !data) return <EmptyState message="Strategy not found" hint={(error as Error)?.message} />;
+
+  const m = data.metrics_summary;
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border p-4">
-      <div className="flex items-center gap-3">
-        <Link href="/strategies" className="text-sm text-muted-foreground underline">← Library</Link>
-        <h1 className="text-2xl font-semibold">{data.name}</h1>
-        <Badge variant="outline">{data.family}</Badge>
-      </div>
-      <div className="text-sm text-muted-foreground flex flex-wrap gap-x-4">
-        <span>#{data.strategy_id}</span>
-        <span>Family: {data.family}</span>
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Link href="/strategies" className="text-xs text-text-muted hover:text-foreground">
+          ← Strategies
+        </Link>
+        <h1 className="text-xl font-semibold">{data.name}</h1>
+        <span className="rounded-md border border-border bg-elevated px-2 py-0.5 text-xs text-text-secondary">
+          {data.family}
+        </span>
         {data.parent_strategy_id ? (
-          <span>
-            Parent: <Link href={`/strategies/${data.parent_strategy_id}`} className="underline">
-              #{data.parent_strategy_id}
-            </Link>
-          </span>
+          <Link href={`/strategies/${data.parent_strategy_id}`} className="text-xs text-primary">
+            parent #{data.parent_strategy_id}
+          </Link>
         ) : (
-          <span>Parent: — (gen-0 seed)</span>
+          <span className="text-xs text-text-muted">gen-0 seed</span>
         )}
       </div>
-      <pre className="text-xs bg-muted rounded p-2 overflow-x-auto">{JSON.stringify(data.params, null, 2)}</pre>
+      <div className="flex flex-wrap gap-2">
+        <MetricTile label="Best Sharpe" value={m.best_sharpe != null ? m.best_sharpe.toFixed(2) : "—"} accent />
+        <MetricTile label="Best Sortino" value={m.best_sortino != null ? m.best_sortino.toFixed(2) : "—"} />
+        <MetricTile
+          label="Avg Win Rate"
+          value={m.avg_win_rate != null ? `${(m.avg_win_rate * 100).toFixed(0)}%` : "—"}
+        />
+        <MetricTile
+          label="Max Drawdown"
+          value={m.max_drawdown != null ? `${(m.max_drawdown * 100).toFixed(1)}%` : "—"}
+        />
+        <MetricTile label="Backtests" value={m.n_backtests} />
+      </div>
+      <Card className="p-3">
+        <pre className="overflow-x-auto text-xs text-text-secondary">
+          {JSON.stringify(data.params, null, 2)}
+        </pre>
+      </Card>
     </div>
   );
 }

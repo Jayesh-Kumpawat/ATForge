@@ -1,33 +1,25 @@
-import { StrategyHeader } from "./_components/StrategyHeader";
-import { AggregateMetricsCard } from "./_components/AggregateMetricsCard";
-import { SymbolRunSelector } from "./_components/SymbolRunSelector";
-import { PriceSignalChart } from "./_components/PriceSignalChart";
-import { EquityCurveCard } from "./_components/EquityCurveCard";
-import { DrawdownCard } from "./_components/DrawdownCard";
-import { BacktestPerSymbolTable } from "./_components/BacktestPerSymbolTable";
-import { LineageTree } from "./_components/LineageTree";
-import { ReasoningCard } from "./_components/ReasoningCard";
-import { ExperimentHistoryTable } from "./_components/ExperimentHistoryTable";
+"use client";
 
-export default function StrategyDetailPage({ params }: { params: { id: string } }) {
+import { Suspense } from "react";
+import { useParams } from "next/navigation";
+import { StrategyHeader } from "./_components/StrategyHeader";
+import { StrategyCharts } from "./_components/StrategyCharts";
+import { StrategyLineage } from "./_components/StrategyLineage";
+import { StrategyBacktests } from "./_components/StrategyBacktests";
+import { Loading } from "@/components/common/Loading";
+
+export default function StrategyDetailPage() {
+  const params = useParams();
   const id = Number(params.id);
+
   return (
-    <div className="flex flex-col gap-4">
-      <StrategyHeader id={id} />
-      <AggregateMetricsCard id={id} />
-      <SymbolRunSelector id={id} />
-      <PriceSignalChart id={id} />
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <EquityCurveCard id={id} />
-        <DrawdownCard id={id} />
+    <Suspense fallback={<Loading rows={4} />}>
+      <div className="flex flex-col gap-5">
+        <StrategyHeader id={id} />
+        <StrategyCharts id={id} />
+        <StrategyLineage id={id} />
+        <StrategyBacktests id={id} />
       </div>
-      <BacktestPerSymbolTable id={id} />
-      <LineageTree id={id} />
-      <ReasoningCard id={id} />
-      <div>
-        <h2 className="text-sm font-medium mb-2">Experiment History</h2>
-        <ExperimentHistoryTable id={id} />
-      </div>
-    </div>
+    </Suspense>
   );
 }
