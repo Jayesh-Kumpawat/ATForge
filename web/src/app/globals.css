@@ -3,79 +3,83 @@
 /* Dark mode: class-based (next-themes writes .dark on <html>) */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ── shadcn/ui CSS variables ── */
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+/* ── Refined Quant tokens ── */
+:root, .dark {
+  /* shadcn-named tokens (consumed by components/ui/*) */
+  --background: #0a0b0d;
+  --foreground: #e6e8eb;
+  --card: #131419;
+  --card-foreground: #e6e8eb;
+  --popover: #131419;
+  --popover-foreground: #e6e8eb;
+  --primary: #2dd4bf;
+  --primary-foreground: #06302b;
+  --secondary: #1a1c22;
+  --secondary-foreground: #e6e8eb;
+  --muted: #1a1c22;
+  --muted-foreground: #9aa4af;
+  --accent: #1f232c;
+  --accent-foreground: #e6e8eb;
+  --destructive: #f87171;
+  --destructive-foreground: #2a0d0d;
+  --border: #23262e;
+  --input: #23262e;
+  --ring: #2dd4bf;
   --radius: 0.5rem;
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+
+  /* Refined Quant extras */
+  --surface: #0c0d10;
+  --elevated: #131419;
+  --border-strong: #2f333d;
+  --text-secondary: #9aa4af;
+  --text-muted: #6b7280;
+  --accent-teal: #2dd4bf;
+  --accent-dim: rgba(45, 212, 191, 0.12);
+  --up: #34d399;
+  --down: #f87171;
+  --info: #60a5fa;
+  --warn: #fbbf24;
+  --violet: #a78bfa;
+  --rose: #fb7185;
 }
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+/* Light mode mirror */
+.light {
+  --background: #f7f8fa;
+  --foreground: #14171c;
+  --card: #ffffff;
+  --card-foreground: #14171c;
+  --popover: #ffffff;
+  --popover-foreground: #14171c;
+  --primary: #0d9488;
+  --primary-foreground: #ffffff;
+  --secondary: #eceef1;
+  --secondary-foreground: #14171c;
+  --muted: #eceef1;
+  --muted-foreground: #5b6470;
+  --accent: #eceef1;
+  --accent-foreground: #14171c;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #dde0e5;
+  --input: #dde0e5;
+  --ring: #0d9488;
+  --surface: #ffffff;
+  --elevated: #ffffff;
+  --border-strong: #c4c9d0;
+  --text-secondary: #5b6470;
+  --text-muted: #8b93a0;
+  --accent-teal: #0d9488;
+  --accent-dim: rgba(13, 148, 136, 0.1);
+  --up: #059669;
+  --down: #dc2626;
+  --info: #2563eb;
+  --warn: #d97706;
+  --violet: #7c3aed;
+  --rose: #e11d48;
 }
 
-/* ── Tailwind v4: map CSS vars to theme tokens ── */
+/* ── Tailwind v4 theme mapping ── */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -96,18 +100,25 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-surface: var(--surface);
+  --color-elevated: var(--elevated);
+  --color-border-strong: var(--border-strong);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-up: var(--up);
+  --color-down: var(--down);
+  --color-info: var(--info);
+  --color-warn: var(--warn);
+  --color-violet: var(--violet);
+  --color-rose: var(--rose);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
   --font-sans: var(--font-inter, ui-sans-serif, system-ui, sans-serif);
-  --font-mono: ui-monospace, "Cascadia Code", "Source Code Pro", Menlo, monospace;
+  --font-mono: var(--font-mono-stack, ui-monospace, "JetBrains Mono", Menlo, monospace);
 }
 
-/* ── Base reset ── */
-* {
-  border-color: var(--border);
-}
+* { border-color: var(--border); }
 
 body {
   background-color: var(--background);
@@ -116,3 +127,6 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* Numeric/monospace utility — use on numbers, IDs, timestamps */
+.tabular { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
