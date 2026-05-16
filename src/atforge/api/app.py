@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from atforge.api.routes import health, runs, strategies
+from atforge.api.routes import health, runs, stats, strategies
 
 log = logging.getLogger("atforge.api")
 
@@ -30,6 +30,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, tags=["health"])
     app.include_router(runs.router)
     app.include_router(strategies.router)
+    app.include_router(stats.router)
 
     @app.exception_handler(HTTPException)
     async def _http_exc_handler(request: Request, exc: HTTPException) -> JSONResponse:
