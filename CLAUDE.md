@@ -105,6 +105,7 @@ START → load_universe → fetch_data → detect_patterns
 - **A2 Phase 7** ✅ complete — critic agent logic: ReAct loop per proposal, vetoes logged mutator='critic_veto', EvtCriticVerdict, llm_router on PipelineDeps (276 tests)
 - **A2 Phase 8** ✅ complete — AgentRoleConfig(llm_priority, model), atforge.yaml, load_role_configs(), exploiter_node wired ResearchAgentMutator temp=0.4 (276 tests)
 - **A2 Phase 9** ✅ complete — Langfuse trace tags, veto scoring, Agent Activity dashboard (289 tests)
+- **Track C redesign** ✅ complete — run-first dashboard: Overview/Monitor/Runs/Run Detail/Strategies/Strategy Detail, Refined Quant design system, 4 new read-only API routes (/stats, /runs/{id}/rankings|evolution|timeline)
 - **Phase 2b** deferred — OpenEvolve population dynamics, Qdrant similarity dedup, per-symbol ratchet, bootstrap significance
 - **Phase 3** deferred — HITL Telegram approval, paper trading, Kite broker integration
 
