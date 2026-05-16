@@ -6,3 +6,6 @@ export { Chip } from "./Chip";
 export { ValueText } from "./ValueText";
 export { DataTable, type Column } from "./DataTable";
 export { Timeline } from "./Timeline";
+export { ChartCard } from "./ChartCard";
+export { Sparkline } from "./Sparkline";
+export { FilterBar } from "./FilterBar";
