@@ -25,3 +25,6 @@ Thumbs.db
 # Graphify output (regenerated on demand)
 graphify-out/
 .superpowers/
+
+# Next.js build output
+.next/
