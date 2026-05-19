@@ -10,14 +10,14 @@ wraps each call in a Langfuse trace.
 
 ```
 llm/
-  types.py       — LlmRequest, LlmResponse, LlmProvider Protocol, error hierarchy
+  types.py       — LlmRequest, LlmResponse, LlmProvider Protocol, ToolSpec/ToolCall/Message, errors
   registry.py    — ProviderRegistry, build_default_registry(settings)
   router.py      — complete_with_fallback (single public entrypoint)
-  tracing.py     — Langfuse 4.x trace_completion context manager
+  tracing.py     — Langfuse 4.x trace_completion / trace_node / score_current_observation
   providers/
-    gemini.py    — Google Gemini via openai-compat shim
-    groq.py      — Groq cloud
-    openrouter.py — OpenRouter (20+ free models)
+    _openai_compat.py — OpenAICompatProvider base + body/parse/error helpers
+    gemini.py    — Gemini (native Generative Language API — NOT openai-compat)
+    groq.py, openrouter.py, cerebras.py, nvidia.py — OpenAI-compat subclasses (~10 lines each)
     ollama.py    — Local Ollama (gated by settings.enable_ollama)
 ```
 
@@ -30,7 +30,7 @@ from atforge.llm.types import LlmRequest
 from atforge.config import settings
 
 registry = build_default_registry(settings)
-priority = settings.llm_provider_priority  # e.g. ["gemini", "groq", "openrouter"]
+priority = settings.llm_provider_priority  # default ["gemini","groq","openrouter","cerebras","nvidia"]
 
 response = complete_with_fallback(
     LlmRequest(
@@ -48,7 +48,7 @@ print(response.text)
 
 ## Tool calling (A1 addition)
 
-Multi-turn tool calling is supported for providers with `supports_tools=True` (currently Gemini only).
+Multi-turn tool calling is supported for providers with `supports_tools=True` — that is **all five cloud providers** (Gemini, Groq, OpenRouter, Cerebras, NVIDIA). Only `ollama` has `supports_tools=False`. `OpenAICompatProvider` sets the class default `supports_tools=True`, inherited by the four OpenAI-compat subclasses; `GeminiProvider` sets it explicitly.
 
 ```python
 # New types in types.py
@@ -72,7 +72,7 @@ class Message:
     tool_call_id: str | None = None  # set when role=="tool"
 ```
 
-Router filter: when `LlmRequest.tools` is set, `complete_with_fallback` skips providers where `supports_tools=False`. All non-Gemini providers have `supports_tools=False`.
+Router filter: when `LlmRequest.tools` is set, `complete_with_fallback` skips providers where `supports_tools=False` (i.e. `ollama`). If no tool-capable provider remains, it raises `LlmExhausted`.
 
 Used by: `ResearchAgentMutator` / `run_react_loop` in `evolution/agent_runner.py`.
 
@@ -164,7 +164,10 @@ Signature: `score_current_observation(name, value, *, enabled=False, client=None
 
 ## Adding a new provider
 
-1. Create `llm/providers/myprovider.py` with a class exposing `name`, `default_model`, `complete(request)`, `supports(model)`.
+1. Create `llm/providers/myprovider.py`. If the API is OpenAI-compatible, subclass
+   `OpenAICompatProvider` and set `name` / `base_url` / `default_model` (~10 lines, tool
+   calling included for free). Otherwise expose `name`, `default_model`, `supports_tools`,
+   `complete(request)`, `supports(model)`.
 2. Add a registration block in `registry.py::build_default_registry` (gated on an API key check).
 3. Done — no other changes needed in router, mutators, or ratchet.
 
@@ -175,9 +178,14 @@ Claude Code (interactive session) is the pair-programmer only. Do not add Anthro
 
 ## Provider defaults
 
-| Provider | Default model | Free tier |
+| Provider | Default model | supports_tools |
 |---|---|---|
-| Gemini | gemini-2.5-flash | 1,500 RPD |
-| Groq | llama-3.3-70b-versatile | ~14,400 RPD (burst) |
-| OpenRouter | auto | 20+ free models |
-| Ollama | qwen2.5-coder:14b | unlimited (local) |
+| Gemini | gemini-2.5-flash | yes |
+| Groq | llama-3.1-8b-instant | yes |
+| OpenRouter | meta-llama/llama-3.1-8b-instruct:free | yes |
+| Cerebras | llama-3.3-70b | yes |
+| NVIDIA | meta/llama-3.3-70b-instruct | yes |
+| Ollama | qwen2.5-coder:14b | no |
+
+> Default models are the `default_model` set in each provider class — overridden per
+> request by `LlmRequest.model` or globally by `settings.llm_default_model`.

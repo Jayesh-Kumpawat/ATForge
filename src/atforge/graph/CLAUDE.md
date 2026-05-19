@@ -1,5 +1,8 @@
 # LangGraph Pipeline — `src/atforge/graph/`
 
+> Canonical architecture reference: `docs/02_EXECUTION_FLOW.md` (full trace) and
+> `docs/03_AGENTS_AND_TOOLS.md` (agent nodes). Keep this file in sync with the code.
+
 ## What this module does
 
 Orchestrates the full Phase 2a pipeline using LangGraph's `StateGraph`. Wires pure node functions into a directed graph with parallel fan-out, an evolution loop, and a conditional stopping criterion.
@@ -90,7 +93,7 @@ START
   → [Send×N] run_backtest_one  ← Send API fan-out (one Send per signal_ref)
   → ratchet_node           # no-op on generation=0; scores gen≥1 backtest results
   → rank                   # top_rankings() from SQLite
-  → explorer_node          # propose novel mutations — ResearchAgentMutator, high-temp
+  → explorer_node          # propose mutations — runs deps.mutators (param_delta, composition)
   → exploiter_node         # refine top performers — ResearchAgentMutator, low-temp
   → critic_node            # hard-veto proposals via ReAct loop; logs critic_veto rows
   → aggregate_node         # filter vetoed, upsert survivors → mutations reducer
@@ -142,19 +145,28 @@ Why factories instead of classes: pure functions are easy to test, `deps` inject
 - Never raises — logs failures to `failures` list
 
 ### `explorer_node` (A2)
-- Runs `ResearchAgentMutator` at high temperature (from `deps.role_configs["explorer"]`)
-- Uses `build_research_tools(deps)` — 5 read-only DB tools for historical lookups
-- Deduplicates proposals by fingerprint (`parent_id + canonical JSON`) before emitting
+- Skips (returns empty) when `generation + 1 >= max_generations`
+- Runs **all `deps.mutators`** (default `ParamDeltaMutator`, `CompositionMutator`) via
+  `_proposals_from_mutators` on the top-N strategies of the current generation —
+  single-shot LLM calls, NO ReAct loop, NO tools
+- Does NOT read `role_configs["explorer"]` — the explorer's 0.9 temperature is config-only
+  and unused; mutators use their own constructor temperatures (0.8 / 0.7)
+- Tags each proposal with `role="explorer"` and a `fingerprint` (parent_id + canonical JSON)
 - Returns `{"proposed_mutations": [proposals]}` — merged via reducer
 
 ### `exploiter_node` (A2)
-- Runs `ResearchAgentMutator` at low temperature (from `deps.role_configs["exploiter"]`)
+- Skips when `generation + 1 >= max_generations` OR `deps.llm_router is None`
+- Builds a `ResearchAgentMutator` from `role_configs["exploiter"]` (temp 0.4, exploiter
+  prompt) — a real ReAct agent with the 5 research tools
 - Targets top-N strategies from current generation by Sharpe
 - Returns `{"proposed_mutations": [proposals]}` — appended to explorer's proposals
 
 ### `critic_node` (A2)
-- For each proposal in `state["proposed_mutations"]`, runs a bounded ReAct loop
+- Skips when there are no current-generation proposals OR `deps.llm_router is None`
+- For each proposal, runs a bounded ReAct loop (`role_configs["critic"]`, temp 0.3) with
+  the 5 research tools
 - On veto: calls `insert_experiment` with `mutator="critic_veto"`, `child_strategy_id=NULL`, `accepted=0`
+- Safe default: if the LLM fails or output won't parse → **accept** (never block on LLM error)
 - Emits `EvtCriticVerdict` to `EventBus` for each verdict
 - Scores `veto_rate` on active Langfuse span via `score_current_observation`
 - Returns `{"vetoed_mutations": [vetoed_configs]}` — merged via reducer
@@ -177,8 +189,11 @@ Why factories instead of classes: pure functions are easy to test, `deps` inject
 - `max_generations=1` (default) → always stops → identical behavior to Phase 1
 
 ### `advance_generation`
-- Reads `experiments` table to find accepted child strategy IDs for current generation
-- Falls back to all proposed children if none accepted (keeps evolution alive)
+- Reads `experiments` for accepted child strategy IDs, then falls back to ALL proposed
+  children if none accepted (keeps evolution alive)
+- Timing quirk: the ratchet that would mark those children accepted has not run yet when
+  `advance_generation` queries — so the fallback is ALWAYS taken. The ratchet is advisory
+  (logged for analysis); the critic veto is the real per-generation gate. See `docs/04_DESIGN_DECISIONS.md`.
 - Returns `{"generation": generation + 1, "detector_configs": new_configs}`
 
 ## Error handling
@@ -191,9 +206,12 @@ failures.append({"node": "run_backtest", "symbol": symbol, "reason": str(exc)})
 ## Tests
 
 ```
-tests/graph/test_pipeline.py       — Phase 1 E2E with synthetic provider
-tests/graph/test_send_fanout.py    — dispatcher returns N Sends, worker writes DB row
-tests/graph/test_mutate_node.py    — mutate_strategies registers child in DB,
-                                     ratchet writes experiment rows, full 2-gen loop
+tests/graph/test_pipeline.py        — Phase 1 E2E with synthetic provider
+tests/graph/test_send_fanout.py     — dispatcher returns N Sends, worker writes DB row
+tests/graph/test_state_reducers.py  — reducer vs last-writer-wins merge behavior
+tests/graph/test_mutate_node.py     — ratchet + multi-generation evolution loop
+tests/graph/test_a2_nodes.py        — explorer / exploiter / aggregate node topology
+tests/graph/test_a2_critic_node.py  — critic ReAct loop, veto logging, safe-accept default
+tests/graph/test_a2_phase8.py       — role-config wiring (exploiter ResearchAgentMutator)
 tests/integration/test_phase2_pipeline.py — 2-generation run with mocked LLM
 ```
