@@ -76,6 +76,7 @@ class EvtAgentToolCall:
     iteration: int
     args_summary: str  # JSON, max 200 chars
     parent_strategy_id: int | None = None
+    trace_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,7 @@ class EvtAgentReasoning:
     iteration: int
     text: str  # max 500 chars
     parent_strategy_id: int | None = None
+    trace_name: str | None = None
 
 
 @dataclass(frozen=True)

@@ -67,6 +67,7 @@ def run_react_loop(
             log.warning("react_loop_llm_failed", iteration=iteration, error=str(exc))
             return None
 
+        iter_trace = f"{trace_name}_iter{iteration}"
         if event_bus and response.text:
             event_bus.emit(
                 EvtAgentReasoning(
@@ -74,6 +75,7 @@ def run_react_loop(
                     iteration=iteration,
                     text=response.text[:500],
                     parent_strategy_id=parent_strategy_id,
+                    trace_name=iter_trace,
                 )
             )
 
@@ -92,6 +94,7 @@ def run_react_loop(
                         iteration=iteration,
                         args_summary=json.dumps(tc.arguments)[:200],
                         parent_strategy_id=parent_strategy_id,
+                        trace_name=iter_trace,
                     )
                 )
             try:
